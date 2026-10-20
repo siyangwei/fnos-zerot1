@@ -22,13 +22,6 @@ on:
         description: 'ophub release tag'
         required: true
         default: 'fnnas_rockchip_1253'
-  push:
-    tags:
-      - 'v*'
-    paths:
-      - 'dts/**'
-      - 'build-image.sh'
-      - '.github/workflows/build.yml'
 
 jobs:
   build:
