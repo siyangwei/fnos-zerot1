@@ -1,0 +1,14 @@
+# 构建产物
+/work/
+/output/
+*.img
+*.img.gz
+
+# Python
+__pycache__/
+*.pyc
+
+# 编辑器
+.vscode/
+.idea/
+*.swp

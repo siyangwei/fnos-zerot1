@@ -1,0 +1,88 @@
+name: build-fnos-image
+
+# 构建 fnOS(fnNAS) for Shimeta AIOT-3588A (RK3588)
+# 流程：下载 ophub 底稿镜像 -> 编译本板 DTB -> 替换 boot 分区 -> 重新打包
+
+on:
+  workflow_dispatch:
+    inputs:
+      base_board:
+        description: 'ophub 底稿机型（同 SoC/PMIC 的板子）'
+        required: true
+        default: 'nanopc-t6'
+      base_date:
+        description: 'ophub 镜像日期（如 2026.09.23）'
+        required: true
+        default: '2026.09.23'
+      kernel_ver:
+        description: '内核版本（★必须与底稿镜像一致，如 6.18.18）'
+        required: true
+        default: '6.18.18'
+      release_tag:
+        description: 'ophub release tag'
+        required: true
+        default: 'fnnas_rockchip_1253'
+  push:
+    tags:
+      - 'v*'
+    paths:
+      - 'dts/**'
+      - 'build-image.sh'
+      - '.github/workflows/build.yml'
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: 清理磁盘空间（镜像+源码+产物需要 ~10GB）
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL || true
+          sudo apt-get clean
+          df -h /
+
+      - name: 安装依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            device-tree-compiler make gzip curl xz-utils
+
+      - name: 构建镜像
+        env:
+          BOARD_NAME: aiot3588a
+          BASE_BOARD: ${{ inputs.base_board || 'nanopc-t6' }}
+          BASE_DATE: ${{ inputs.base_date || '2026.09.23' }}
+          KERNEL_VER: ${{ inputs.kernel_ver || '6.18.18' }}
+          FNOS_RELEASE_TAG: ${{ inputs.release_tag || 'fnnas_rockchip_1253' }}
+        run: |
+          sudo -E env \
+            BOARD_NAME="$BOARD_NAME" \
+            BASE_BOARD="$BASE_BOARD" \
+            BASE_DATE="$BASE_DATE" \
+            KERNEL_VER="$KERNEL_VER" \
+            FNOS_RELEASE_TAG="$FNOS_RELEASE_TAG" \
+            ./build-image.sh
+
+      - name: 查看产物
+        run: ls -lh output/
+
+      # workflow_dispatch：作为 artifact 上传（方便下载）
+      - name: 上传构建产物（artifact）
+        uses: actions/upload-artifact@v4
+        with:
+          name: fnos-fnnas-aiot3588a-k6.18
+          path: output/*.img.gz
+          compression-level: 0          # 已经是 gz，不再二次压缩
+          retention-days: 30
+
+      # tag push：自动创建 release 并附带镜像
+      - name: 发布 Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: output/*.img.gz
+          generate_release_notes: true
