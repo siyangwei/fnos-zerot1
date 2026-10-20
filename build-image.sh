@@ -46,28 +46,31 @@ command -v dtc  >/dev/null || warn "缺少 dtc（内核自带的 scripts/dtc 会
 
 # ---------- 1. 底稿镜像 ----------
 IMG="${WORK}/${BASE_IMAGE%.gz}"
-if [ "${SKIP_DOWNLOAD:-0}" != "1" ] && [ ! -f "$IMG" ]; then
-	if [ ! -f "${WORK}/${BASE_IMAGE}" ]; then
-		log "下载底稿镜像: ${BASE_IMAGE}"
-		curl -L --fail --retry 3 -o "${WORK}/${BASE_IMAGE}" "$BASE_URL" \
-			|| die "下载失败，检查 FNOS_RELEASE_TAG / BASE_DATE / 网络"
-	fi
+# 下载（跳过已有 .img.gz；SKIP_DOWNLOAD=1 时完全跳过下载）
+if [ "${SKIP_DOWNLOAD:-0}" != "1" ] && [ ! -f "${WORK}/${BASE_IMAGE}" ]; then
+	log "下载底稿镜像: ${BASE_IMAGE}"
+	curl -L --fail --retry 3 -o "${WORK}/${BASE_IMAGE}" "$BASE_URL" \
+		|| die "下载失败，检查 FNOS_RELEASE_TAG / BASE_DATE / 网络"
+fi
+# 解压（只要 .img 不存在就解压，无论是否 SKIP_DOWNLOAD）
+if [ ! -f "$IMG" ]; then
+	[ -f "${WORK}/${BASE_IMAGE}" ] || die "缺少 ${BASE_IMAGE}（首次构建请勿设 SKIP_DOWNLOAD=1）"
 	log "解压底稿镜像（约 1.7GB）"
 	gunzip -c "${WORK}/${BASE_IMAGE}" > "$IMG"
 fi
-[ -f "$IMG" ] || die "找不到底稿镜像 $IMG（首次构建请勿设 SKIP_DOWNLOAD=1）"
+[ -f "$IMG" ] || die "找不到底稿镜像 $IMG"
 
 # ---------- 2. 编译本板 DTB ----------
 KSRC="${WORK}/linux-${KERNEL_VER}"
 KVER_MAJOR="${KERNEL_VER%%.*}"
 if [ ! -d "$KSRC" ]; then
-	if [ "${SKIP_DOWNLOAD:-0}" != "1" ]; then
-		log "下载 Linux ${KERNEL_VER} 源码（cdn.kernel.org）"
+	log "下载 Linux ${KERNEL_VER} 源码（cdn.kernel.org）"
+	if [ ! -f "${WORK}/linux-${KERNEL_VER}.tar.xz" ]; then
 		curl -L --fail --retry 3 -o "${WORK}/linux-${KERNEL_VER}.tar.xz" \
 			"https://cdn.kernel.org/pub/linux/kernel/v${KVER_MAJOR}.x/linux-${KERNEL_VER}.tar.xz" \
 			|| die "内核源码下载失败"
-		tar -xJf "${WORK}/linux-${KERNEL_VER}.tar.xz" -C "$WORK"
 	fi
+	tar -xJf "${WORK}/linux-${KERNEL_VER}.tar.xz" -C "$WORK"
 fi
 [ -d "$KSRC" ] || die "找不到内核源码目录 $KSRC"
 
@@ -83,6 +86,12 @@ if ! grep -q "rk3588-${BOARD_NAME}.dtb" "$MK"; then
 fi
 
 log "编译 dtb（只需要 host 工具链 + dtc，不需要交叉编译器）"
+# 内核 Makefile 要求存在 .config 才能构建任何目标；defconfig 只用到宿主工具
+if [ ! -f "${KSRC}/.config" ]; then
+	log "生成 .config（ARCH=arm64 defconfig，仅用于 dtb 编译）"
+	make -C "$KSRC" ARCH=arm64 defconfig >/dev/null 2>&1 \
+		|| die "defconfig 失败（缺少 host 编译工具？）"
+fi
 make -C "$KSRC" ARCH=arm64 "rockchip/rk3588-${BOARD_NAME}.dtb" -j"$(nproc)" \
 	|| die "dtb 编译失败（看上面的 dtc 报错）"
 DTB="${KSRC}/arch/arm64/boot/dts/rockchip/rk3588-${BOARD_NAME}.dtb"
