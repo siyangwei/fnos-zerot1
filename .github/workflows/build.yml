@@ -1,27 +1,23 @@
 name: build-fnos-image
 
 # 构建 fnOS(fnNAS) for Shimeta AIOT-3588A (RK3588)
-# 流程：下载 ophub 底稿镜像 -> 编译本板 DTB -> 替换 boot 分区 -> 重新打包
+#
+# 流程（见 docs/BUILD.md）：
+#   1) 下载 ophub 的 fnOS 底稿镜像（nanopc-t6, k6.18.18）→ 只取 rootfs（Debian12 + 飞牛服务）
+#   2) 用友善 u-boot + 友善 Linux 6.1.141 内核（打看门狗/板级 dts 补丁）重新组装
+#   3) 打 rootfs 补丁（fstab / WiFi-BT 固件 / adb / XFCE / watchdog）
+#   4) Rockchip 工具打 update.img（upgrade_tool uf 烧录）
+#
+# 预编译复用：assets/ 里的 MiniLoaderAll.bin、uboot.img（含 distro_bootcmd 补丁）、
+# 打包工具与 WiFi/BT 固件都已入库，日常构建不需要重新编译 u-boot，也不需要下载友善工具链。
 
 on:
   workflow_dispatch:
     inputs:
-      base_board:
-        description: 'ophub 底稿机型（同 SoC/PMIC 的板子）'
-        required: true
-        default: 'nanopc-t6'
-      base_date:
-        description: 'ophub 镜像日期（如 2026.09.23）'
-        required: true
-        default: '2026.09.23'
-      kernel_ver:
-        description: '内核版本（★必须与底稿镜像一致，如 6.18.18）'
-        required: true
-        default: '6.18.18'
-      release_tag:
-        description: 'ophub release tag'
-        required: true
-        default: 'fnnas_rockchip_1253'
+      skip_xfce:
+        description: '跳过 XFCE 桌面（更快的构建，得到一个纯 NAS 系统）'
+        type: boolean
+        default: false
   push:
     tags:
       - 'v*'
@@ -29,15 +25,16 @@ on:
 jobs:
   build:
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
+    timeout-minutes: 180
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: 清理磁盘空间（镜像+源码+产物需要 ~10GB）
+      - name: 清理磁盘（内核源码 + rootfs + 镜像需要 ~20GB）
         run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL || true
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
           sudo apt-get clean
           df -h /
 
@@ -45,40 +42,49 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            device-tree-compiler make gzip curl xz-utils
+            build-essential gcc-aarch64-linux-gnu \
+            qemu-user-static binfmt-support \
+            device-tree-compiler bc rsync git \
+            btrfs-progs dosfstools mtools \
+            gzip xz-utils curl
+          ls -l /usr/bin/qemu-aarch64-static
+          df -h /
 
-      - name: 构建镜像
+      - name: 构建 update.img
         env:
-          BOARD_NAME: aiot3588a
-          BASE_BOARD: ${{ inputs.base_board || 'nanopc-t6' }}
-          BASE_DATE: ${{ inputs.base_date || '2026.09.23' }}
-          KERNEL_VER: ${{ inputs.kernel_ver || '6.18.18' }}
-          FNOS_RELEASE_TAG: ${{ inputs.release_tag || 'fnnas_rockchip_1253' }}
+          SKIP_XFCE: ${{ inputs.skip_xfce && '1' || '0' }}
         run: |
-          sudo -E env \
-            BOARD_NAME="$BOARD_NAME" \
-            BASE_BOARD="$BASE_BOARD" \
-            BASE_DATE="$BASE_DATE" \
-            KERNEL_VER="$KERNEL_VER" \
-            FNOS_RELEASE_TAG="$FNOS_RELEASE_TAG" \
-            ./build-image.sh
+          if [ "$SKIP_XFCE" = "1" ]; then
+            mv patches/rootfs/40-xfce.sh /tmp/40-xfce.sh.disabled
+          fi
+          sudo -E ./scripts/build-all.sh
+          if [ "$SKIP_XFCE" = "1" ]; then
+            mv /tmp/40-xfce.sh.disabled patches/rootfs/40-xfce.sh
+          fi
 
-      - name: 查看产物
-        run: ls -lh output/
+      - name: 产物信息
+        run: |
+          ls -lh output/
+          sha256sum output/*.img | tee output/SHA256SUMS
 
-      # workflow_dispatch：作为 artifact 上传（方便下载）
+      - name: 压缩（update.img ~5.8GB → gz ~1.8GB，便于上传）
+        run: gzip -1 -k output/*.img
+
       - name: 上传构建产物（artifact）
         uses: actions/upload-artifact@v4
         with:
-          name: fnos-fnnas-aiot3588a-k6.18
-          path: output/*.img.gz
-          compression-level: 0          # 已经是 gz，不再二次压缩
+          name: fnos-aiot3588a-update
+          path: |
+            output/*.img.gz
+            output/SHA256SUMS
+          compression-level: 0
           retention-days: 30
 
-      # tag push：自动创建 release 并附带镜像
-      - name: 发布 Release
+      - name: 发布 Release（tag push 时）
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: output/*.img.gz
+          files: |
+            output/*.img.gz
+            output/SHA256SUMS
           generate_release_notes: true

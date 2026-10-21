@@ -1,257 +1,287 @@
 # 构建文档 —— fnOS (fnNAS) for Shimeta AIOT-3588A (RK3588)
 
-本文说明这个适配项目**用到了哪些文件**、**怎么把板级 DTS 链接进内核构建**、以及完整的构建/烧录/验证流程。
+本文说明这个适配项目**用到了哪些文件**、**怎么把板级 DTS 与补丁链进内核构建**、以及完整的
+构建 / 烧录 / 验证流程。目标是：换一台机器（或 GitHub Actions）照着本文就能复现出可烧录的
+`update.img`。
 
 ---
 
-## 1. 项目结构
+## 1. 技术路线（为什么这么选）
+
+飞牛 fnOS 官方只发布 x86 与 ARM64 的**成品镜像**（基于 Debian 12），没有提供板级源码。
+因此本项目采用「**飞牛 rootfs + 友善 BSP 启动链**」的组合：
+
+| 部件 | 采用方案 | 为什么 |
+|---|---|---|
+| 根文件系统 | fnOS 官方镜像 `nanopc-t6` 的 rootfs（Debian 12 + 飞牛服务） | 飞牛只发成品 rootfs，这是唯一来源；nanopc-t6 同为 RK3588 + RK806 单 PMIC，rootfs 里的电源/驱动假设最接近 |
+| 内核 | **友善 `kernel-rockchip`（nanopi6-v6.1.y，6.1.141）** | 有完整的 RK3588 BSP 驱动（eDP/HDMI/音频/WiFi/BT/PCIe/看门狗），启动参数也是 RK 风格；mainline 6.18 缺 eDP/HDMI 控制器节点 |
+| u-boot + loader | **友善 `uboot-rockchip`（nanopi6-v2017.09）** | 与友善内核配套、能引导 extlinux/FIT；打一个补丁让它扫描 GPT 全部分区（见 §4.2） |
+| 打包工具 | Rockchip `afptool` / `rkImageMaker` / `resource_tool`（已入库 `assets/tools/`） | 生成 `update.img`，可直接 `upgrade_tool uf` 烧录 |
+
+> 早期曾直接改 ophub 的成品牌镜像（mainline 6.18 内核），但 mainline 的 eDP/HDMI 驱动不完整、
+> WiFi/BT 固件缺失、且无法方便地加看门狗驱动，所以最终改为「友善内核 + 飞牛 rootfs」重打包。
+
+---
+
+## 2. 项目结构
 
 ```
 fnos-zerot1/
 ├── dts/
-│   └── rk3588-aiot3588a.dts     # ★ 板级设备树（本项目的核心）
-├── build-image.sh               # ★ 一键构建：下载底稿镜像 + 编译 DTB + 替换 + 打包
+│   └── rk3588-aiot3588a.dts          # ★ 板级设备树（BSP 版，44KB，从 RK BSP 树搬来）
+├── patches/
+│   ├── uboot/
+│   │   └── 0001-distro-bootcmd-scan-all-partitions.patch   # 让 distro_bootcmd 扫全部分区
+│   ├── kernel/
+│   │   ├── 0001-add-smdt-mcu-watchdog.patch                # Kconfig/Makefile/defconfig 三处
+│   │   └── files/smdt_mcu_wdt.c      # 板载 STM8S00K3 MCU 看门狗驱动（i2c-6 0x62）
+│   └── rootfs/
+│       ├── 10-fstab.sh               # 删掉 /boot ext4 挂载行（boot 是 FAT32）
+│       ├── 20-firmware.sh            # 装 WiFi(AP6256)/蓝牙(BCM4345C0) 固件
+│       ├── 30-adb.sh                 # 装 Linux adb/adbd（调试用，qemu chroot）
+│       ├── 40-xfce.sh                # 装 XFCE 桌面 + lightdm 自动登录（qemu chroot）
+│       └── 50-watchdog.sh            # systemd RuntimeWatchdogSec + watchdog 工具
+├── assets/                           # ★ 预编译复用资源（已入库，日常构建不需重新生成）
+│   ├── MiniLoaderAll.bin             # 友善 SPL loader（含 DDR 训练固件，487,872B）
+│   ├── uboot.img                     # 友善 u-boot（4MB FIT，含 distro_bootcmd 补丁）
+│   ├── firmware/                     # brcmfmac43456-sdio.bin/.txt、BCM4345C0.hcd、regulatory.db
+│   └── tools/                        # afptool / rkImageMaker / resource_tool / mkupdate.sh
 ├── scripts/
-│   └── check-upstream.py        # 检查 ophub/fnnas 上游是否有更新（内核版本变了要同步）
-├── assets/
-│   └── MiniLoaderAll.bin        # 原厂 loader（只在救砖/整片烧写时用，正常构建不需要）
-├── .github/workflows/
-│   └── build.yml                # GitHub Actions 自动构建
-├── docs/
-│   └── BUILD.md                 # 本文
-├── work/                        # 构建中间产物（下载的镜像、内核源码，gitignore）
-└── output/                      # 最终镜像（gitignore）
+│   ├── lib-common.sh                 # 共用变量（WORK_DIR/IMAGE_DIR/ROOTFS）与 log/die
+│   ├── lib-chroot.sh                 # qemu-aarch64-static + chroot 辅助
+│   ├── build-all.sh                  # ★ 一键：rootfs → kernel → pack
+│   ├── build-rootfs.sh               # 下载/复用 fnOS 底稿 → 提取 rootfs → 打补丁
+│   ├── build-kernel.sh               # 编译友善内核 → 打补丁 → Image + dtb + modules_install
+│   ├── build-uboot.sh                # （可选）重编 u-boot 并更新 assets/
+│   ├── pack-image.sh                 # 组装 boot/rootfs/resource/misc → mkupdate.sh → update.img
+│   └── check-upstream.py             # 查询 ophub/fnnas 是否有新底稿镜像
+├── .github/workflows/build.yml       # GitHub Actions（手动触发 / tag）
+├── docs/BUILD.md                     # 本文
+├── work/                             # 构建中间产物（gitignore）
+├── output/                           # update.img 产物（gitignore）
+└── rootfs/                           # 提取出来的 fnOS 根文件系统（gitignore）
 ```
 
 ---
 
-## 2. 用到的外部文件与版本
+## 3. 外部文件与版本
 
-| 用途 | 文件 / 来源 | 版本 | 说明 |
+| 用途 | 具体文件 | 版本 | 备注 |
 |---|---|---|---|
-| 底稿系统镜像 | [ophub/fnnas](https://github.com/ophub/fnnas) release `fnnas_rockchip_1253` 里的 `fnnas_rockchip_nanopc-t6_k6.18.18_2026.09.23.img.gz` | 内核 **6.18.18** | 选 `nanopc-t6` 是因为它同为 RK3588 + RK806 PMIC，驱动/电源域最接近 |
-| 内核设备树底稿 | mainline Linux **v6.18** 的 `arch/arm64/boot/dts/rockchip/rk3588-nanopc-t6.dtsi` | 6.18.18 | 本板 DTS 在它基础上裁剪修改（显示/音频/电源/串口都不同） |
-| 内核源码 | `https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.18.18.tar.xz` | 6.18.18 | **只用来编译 DTB**，不重新编译整个内核（镜像里已经有同版本内核） |
-| 硬件事实来源 | 视美泰原厂 2023 固件反编译树 `rk-kernel.dts` + 我们 RK BSP 6.1 的 `rk3588-aiot3588a.dts` | — | 引脚、GPIO、面板时序、电源顺序都以原厂固件为准 |
-
-> ⚠ **内核版本必须与底稿镜像严格一致**：DTB 里的 `compatible` 字符串是和内核驱动匹配的，
-> 6.18.18 的 dtb 拿到 6.12 的内核上会大面积 probe 失败。底稿镜像升级后请同步修改
-> `build-image.sh` 里的 `KERNEL_VER / BASE_DATE / FNOS_RELEASE_TAG`，并先跑
-> `scripts/check-upstream.py` 确认。
+| fnOS rootfs 来源 | `fnnas_rockchip_nanopc-t6_k6.18.18_2026.09.23.img.gz`<br>（[ophub/fnnas](https://github.com/ophub/fnnas) release `fnnas_rockchip_1253`） | 6.18.18（只取 rootfs） | 下载 1.75GB；只把 GPT 第 2 分区（rootfs，btrfs，offset = 1081344×512）挂出来 rsync |
+| 内核源码 | [friendlyarm/kernel-rockchip](https://github.com/friendlyarm/kernel-rockchip) 分支 `nanopi6-v6.1.y` | 6.1.141 | 编译出 `Image` + `dtb` + `modules` |
+| u-boot 源码 | [friendlyarm/uboot-rockchip](https://github.com/friendlyarm/uboot-rockchip) 分支 `nanopi6-v2017.09` | 2017.09 | 只在要改 u-boot 时才编；平时用 `assets/uboot.img` |
+| u-boot 依赖 | [friendlyarm/rkbin](https://github.com/friendlyarm/rkbin) 分支 `nanopi6` | — | 提供 DDR 固件 / loader / resource_tool |
+| 板级 DTS | `dts/rk3588-aiot3588a.dts` | BSP 6.1 版 | 来自我们 RK BSP 树（已针对本板验证过 eDP/串口/蓝牙/风扇/PCIe） |
+| 打包工具 | `assets/tools/{afptool,rkImageMaker,resource_tool,mkupdate.sh,gen-package-file.sh}` | Rockchip 官方 | 已入库，无需下载 |
 
 ---
 
-## 3. 为什么不能直接用 NanoPC-T6 的现成 DTB
+## 4. 构建流程详解
 
-NanoPC-T6 与本板同为 RK3588，但硬件差异不少，直接套用会黑屏/无音频：
+### 4.1 rootfs：`scripts/build-rootfs.sh`
 
-| 功能 | NanoPC-T6 | **AIOT-3588A（本板）** |
+1. 若 `work/fnnas_rockchip_*.img` 不存在 → 用 **8 线程分段下载** ophub 镜像（GitHub 对单连接限速，
+   多段并行能到 10+ MB/s），再 `gunzip` 解压出 7GB 的 `.img`。
+2. `losetup -o $((1081344*512))` 把 GPT 第 2 分区（rootfs，btrfs）挂到临时点，`rsync -aHAX --numeric-ids`
+   拷到 `work/rootfs/`。
+3. 按文件名顺序跑 `patches/rootfs/*.sh`（10→20→30→40→50）。
+4. 环境变量 `SKIP_ROOTFS_EXTRACT=1` 可跳过提取，直接在已有的 `work/rootfs/` 上重打补丁（迭代快）。
+
+### 4.2 u-boot 补丁（已预编译进 `assets/uboot.img`）
+
+友善 u-boot 的 `distro_bootcmd` 原来只扫描**带 bootable 标志**的分区（`part list -bootable`），
+我们的 GPT 里 boot 分区是第 4 个、没有 bootable 标志，导致 u-boot 永远找不到 `boot.extlinux`。
+补丁改 `include/config_distro_bootcmd.h`：`setenv devplist 1` → `setenv devplist "1 2 3 4 5 6"`，
+即**扫全部分区**。改完重新编译一次，把 `uboot.img` 放进 `assets/`（现有产物即为此版本）。
+
+### 4.3 内核：`scripts/build-kernel.sh`
+
+```bash
+git clone -b nanopi6-v6.1.y https://github.com/friendlyarm/kernel-rockchip
+cd kernel-rockchip
+# 1) 应用补丁（Kconfig/Makefile/defconfig 三处）
+git apply ../patches/kernel/0001-add-smdt-mcu-watchdog.patch
+# 2) 拷驱动源码（大文件不进 patch）
+cp ../patches/kernel/files/smdt_mcu_wdt.c drivers/watchdog/
+# 3) 拷板级 dts 并注册
+cp ../dts/rk3588-aiot3588a.dts arch/arm64/boot/dts/rockchip/
+echo 'dtb-$(CONFIG_ARCH_ROCKCHIP) += rk3588-aiot3588a.dtb' >> arch/arm64/boot/dts/rockchip/Makefile
+# 4) 配置 + 编译
+make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- nanopi6_linux_defconfig
+make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- Image modules
+# 5) 产物
+#    arch/arm64/boot/Image                               (35MB)
+#    arch/arm64/boot/dts/rockchip/rk3588-aiot3588a.dtb   (292KB)
+#    make INSTALL_MOD_PATH=../rootfs ARCH=arm64 modules_install
+```
+
+交叉工具链优先级：`$CROSS_COMPILE` → 仓库内 `prebuilts/.../aarch64-none-linux-gnu-` →
+系统 `aarch64-linux-gnu-`（GitHub Actions 上 `apt install gcc-aarch64-linux-gnu`）。
+
+> 注意 PATH：如果系统里 `bc` 被包装脚本劫持（比如某些 IDE 自带的 stub），编译会报
+> `python3: can't open file ...kdev-bc-stub.py`。把 `/usr/bin` 放到 PATH 最前面，或装真 `bc`。
+
+### 4.4 看门狗驱动
+
+板载 MCU（STM8S00K3，i2c-6 地址 0x62）约 **603 秒**收不到喂狗就复位 SoC。驱动 `smdt_mcu_wdt.c`
+把它实现成标准 `WATCHDOG_CORE` 设备（`/dev/watchdog`），寄存器协议：
+`0x32←0x01`（arm）、`0x51←0x33`、`0x33←0xab`（kick）、`0x32←0x00`（disarm）。
+用户态由 `50-watchdog.sh` 写 `systemd RuntimeWatchdogSec=30s` 让 systemd 自动喂狗。
+
+### 4.5 打包：`scripts/pack-image.sh`
+
+分区布局（512B 扇区，与 `parameter.txt` 一致）：
+
+| 分区 | 起始 | 大小 | 文件系统 | 内容 |
+|---|---|---|---|---|
+| uboot | 0x00004000 | 4MB | raw | `assets/uboot.img` |
+| misc | 0x00006000 | 4MB | raw | 全零（清 Android recovery 标记） |
+| resource | 0x00008000 | 16MB | raw | `resource_tool` 打包的 `rk-kernel.dtb`（u-boot 从这里读 dtb） |
+| boot | 0x00010000 | 64MB | **FAT32** | `Image` + `dtb/rockchip/*.dtb` + `extlinux/extlinux.conf` |
+| rootfs | 0x00030000 | 按 rootfs 大小（64MB 对齐） | **btrfs** | fnOS rootfs（UUID 固定 `357e9eb7-…`） |
+| userdata | rootfs 之后 | grow | — | 剩余空间 |
+
+> **boot 为什么是 FAT32 而不是 ext4**：友善 u-boot 编译时只开了 `CONFIG_FS_FAT`，没开 `CONFIG_FS_EXT4`，
+> ext4 分区会报 `Unrecognized filesystem type`。FAT32 是唯一稳的选择。
+>
+> **为什么要 resource 分区**：u-boot 的 `rockchip_read_resource_dtb()` 先从 resource 分区找
+> `rk-kernel.dtb`（默认 `dtb_name` 是 `rk3588-nanopi6-rev0e.dtb`，找不到就回退 `rk-kernel.dtb`），
+> 找不到就 `Failed to load DTB, ret=-19`，后续内核永远起不来。
+
+`extlinux.conf`（u-boot 的 distro_bootcmd 扫到 FAT32 分区 4 后读它）：
+
+```
+label fnos
+    kernel /Image
+    fdt /dtb/rockchip/rk3588-aiot3588a.dtb
+    append root=/dev/mmcblk2p5 rootfstype=btrfs rootwait rw \
+           console=ttyS2,1500000n8 console=tty0 net.ifnames=0 max_loop=128 \
+           earlycon=uart8250,mmio32,0xfeb50000
+```
+
+> 用 `root=/dev/mmcblk2p5`（分区 5）而不是 `root=UUID=...`：没有 initramfs 时内核 cmdline
+> 不解析文件系统 UUID，会一直等 `Waiting for root device`。
+
+---
+
+## 5. 本地构建
+
+依赖（Arch / Ubuntu 包名）：
+
+```bash
+# Arch
+sudo pacman -S --needed base-devel aarch64-linux-gnu-gcc qemu-user-static \
+    btrfs-progs dosfstools mtools rsync bc dtc git
+# Ubuntu 24.04
+sudo apt-get install -y build-essential gcc-aarch64-linux-gnu qemu-user-static \
+    btrfs-progs dosfstools mtools rsync bc device-tree-compiler git
+```
+
+一键构建（需要 root：使用 losetup/mount/mkfs/chroot）：
+
+```bash
+sudo ./scripts/build-all.sh
+# 产物：output/fnos-aiot3588a-update-YYYYMMDD.img
+```
+
+分阶段 / 加速：
+
+```bash
+# 只重打 rootfs 补丁（复用已提取的 rootfs）
+sudo SKIP_ROOTFS_EXTRACT=1 ./scripts/build-rootfs.sh
+# 只重编内核
+sudo ./scripts/build-kernel.sh
+# 只重新打包
+sudo ./scripts/pack-image.sh
+# 全部跳过 rootfs+内核，只打包（迭代 extlinux/分区布局时最常用）
+sudo SKIP_ROOTFS=1 SKIP_KERNEL=1 ./scripts/build-all.sh
+```
+
+无 qemu-aarch64-static 时，`30-adb.sh` / `40-xfce.sh` 会自动跳过（系统仍能构建，只是没有 adb/XFCE）。
+
+---
+
+## 6. GitHub Actions
+
+`.github/workflows/build.yml`：
+- **手动触发**（workflow_dispatch）：可勾选「跳过 XFCE」做快速验证构建；
+- **打 tag 触发**（`v*`）：自动构建并发布 Release（附件 = `update.img.gz` + `SHA256SUMS`）。
+
+Actions 里会自动 `apt install qemu-user-static`（自带 binfmt 注册），因此 adb/XFCE 会在
+arm64 chroot 里真正装上。产物 `update.img` 约 5.8GB，先 `gzip -1` 到 ~1.8GB 再上传。
+
+---
+
+## 7. 烧录
+
+```bash
+# 1) 板子进 Maskrom/Loader（USB 2207:350b）
+#    正常系统里：adb reboot bootloader；或按住 REC 上电
+# 2) 下载 loader（Maskrom 下必须先 db）
+upgrade_tool db assets/MiniLoaderAll.bin
+# 3) 烧写整包（约 5.8GB，USB2 需要 5~10 分钟）
+upgrade_tool uf output/fnos-aiot3588a-update-YYYYMMDD.img
+# 4) 复位
+upgrade_tool rd
+```
+
+> **救砖**：`upgrade_tool db assets/MiniLoaderAll.bin` 能救回 Maskrom 设备；
+> Android 镜像都保存在 `03-杂项/自建镜像/`，随时可刷回 Android 14。
+
+---
+
+## 8. 上电验证清单
+
+- 串口（`/dev/ttyACM0`，1500000 8N1）应看到：
+  `DDR ...` → `U-Boot SPL` → `U-Boot 2017.09` → `DTB: rk-kernel.dtb (292054)` →
+  `Starting kernel ...` → Linux 启动日志 → `fnnas login:`
+- 登录：`root` / `root`
+- `ip a` 看 `eth0`（gmac1，DHCP）
+- `dmesg | grep -iE 'fail|error'`
+- WiFi：`nmcli` / `iw dev`（AP6256，需固件已装）
+- 看门狗：`wdctl` / `cat /proc/uptime`（MCU 603s 不喂会复位，systemd 会持续喂）
+- 桌面（如果装了 XFCE）：eDP 屏幕应出现 lightdm 登录/桌面
+
+---
+
+## 9. 已知限制
+
+| 项 | 状态 | 说明 |
 |---|---|---|
-| 主显示 | HDMI0（hdptxphy0） | **eDP**（hdptxphy0 + edp0），HDMI0 与 eDP 共用 PHY，二选一 |
-| HDMI0/1 | 两路都有，走 VP0/VP1 | 只有 **HDMI1**（hdptxphy1，GPIO4_A0 使能），走 **VP0** |
-| eDP | 无 | 1920x1080p60@139MHz；GPIO2_C5 使能、PWM1 背光（GPIO2_C1，周期 20000ns） |
-| 音频 codec | RT5616（i2c7 0x1b） | **ES8388**（i2c7 0x1b），耳机检测 GPIO4_C2、功放使能 GPIO4_A3 低有效 |
-| NPU 电源 | i2c2 rk8602 | **i2c1 rk8602**（i2c2 无设备） |
-| 5V 外设电源 | 无（或不同 GPIO） | **GPIO3_D5 必须 always-on**，否则 eDP AUX 无应答、USB 不工作 |
-| 串口 | uart2/uart6 | **uart1/4/6/7/8**（TTL-1/TTL-2/RS232-4/RS232-5/RS485-3）+ uart9(蓝牙) |
-| 风扇 | pwm1 | **pwm12（m1 引脚组，50kHz，反相）** |
-| SATA / miniPCIe | pcie2x1l1/l2 | **SATA0**（combphy0_ps）+ **miniPCIe 走 pcie2x1l1**（fe180000 / combphy1_ps） |
-| 显示输出芯片 | — | **LT8668** 供电 GPIO4_PB6（always-on） |
-
-DTS 里这些差异都逐条注明了，见 `dts/rk3588-aiot3588a.dts` 头注释。
-
----
-
-## 4. 构建流程
-
-```
-① 下载 ophub 底稿镜像 (.img.gz, ~1.7GB)
-        │
-② 下载 linux-6.18.18 源码（~140MB，只为编译 DTB）
-        │
-③ 把 dts/rk3588-aiot3588a.dts 拷进内核树 + Makefile 注册 dtb
-        │
-④ make ARCH=arm64 rockchip/rk3588-aiot3588a.dtb      ← 只用 host 的 cpp + dtc
-        │
-⑤ losetup --offset $((32768*512)) 挂载镜像 p1（boot 分区）
-        │
-⑥ 替换 /boot/dtb/rockchip/rk3588-aiot3588a.dtb
-   改 /boot/armbianEnv.txt: fdtfile=rockchip/rk3588-aiot3588a.dtb
-        │
-⑦ gzip 打包成 output/fnos-fnnas-aiot3588a-k6.18.18-<日期>.img.gz
-```
-
-全程**不重新编译内核**、不动 rootfs、不需要交叉编译工具链。
+| eDP 显示 | ✅ 有输出 | BSP dts 里 `hdptxphy0` + `route-edp0` 正确；fnOS 默认 headless，装 XFCE 后才有桌面 |
+| HDMI OUT | ⚠️ 待验证 | 板载 HDMI1（hdmi@fdea0000）已 enable，HDMI0 与 eDP 共用 PHY 保持 disabled |
+| HDMI IN | ⚠️ 待验证 | hdmirx_ctrler 已配，需接信号源 |
+| WiFi | ⚠️ 待验证 | brcmfmac43456 固件已装；需确认 `sdio_pwrseq`/regulator 时序 |
+| 蓝牙 | ⚠️ 待验证 | BCM4345C0.hcd 已装；`hci_uart` 走 ttyS9 |
+| 音频 ES8388 | ⚠️ 待验证 | BSP dts 里 I2S0 MCLK/编解码已配 |
+| 5 路串口 | ✅ 预期可用 | BSP dts 已 enable uart1/4/6/7/8/9 |
+| 风扇 | ✅ 预期可用 | pwm12 + thermal trip（BSP dts） |
+| miniPCIe（4G/SSD） | ✅ 硬件就绪 | BSP dts 已开 pcie2x1l1；EC20 走 USB 通道 |
+| SATA0 | ✅ 预期可用 | BSP dts 已开 sata0 |
+| 看门狗 | ✅ 驱动已编译 | smdt_mcu_wdt + systemd RuntimeWatchdogSec |
+| adb | ⚠️ 构建时安装 | Debian arm64 的 android-tools-adb |
+| XFCE | ⚠️ 构建时安装 | lightdm autologin root |
 
 ---
 
-## 5. 内核命令详解（怎么把 DTS 链接进内核）
+## 10. 常见问题
 
-### 5.1 放置位置
-
-arm64 的板级 dts 统一放在内核树：
-
-```
-<linux-6.18.18>/arch/arm64/boot/dts/rockchip/rk3588-aiot3588a.dts
-```
-
-### 5.2 在 Makefile 里注册
-
-`arch/arm64/boot/dts/rockchip/Makefile` 里加一行（`build-image.sh` 会自动加在
-`rk3588-nanopc-t6.dtb` 之后）：
-
-```makefile
-dtb-$(CONFIG_ARCH_ROCKCHIP) += rk3588-aiot3588a.dtb
-```
-
-### 5.3 编译单个 DTB（只需要宿主机工具）
-
-```bash
-cd linux-6.18.18
-make ARCH=arm64 rockchip/rk3588-aiot3588a.dtb -j$(nproc)
-# 产物：arch/arm64/boot/dts/rockchip/rk3588-aiot3588a.dtb
-```
-
-**不需要交叉编译器**：dtb 的构建只用到宿主机的 `cpp`（预处理）+ 内核自带的 `scripts/dtc/dtc`。
-
-### 5.4 等价的手工命令（调试/快速验证时用）
-
-```bash
-cd linux-6.18.18/arch/arm64/boot/dts/rockchip
-
-# 预处理（-nostdinc 防止误用系统头，-D__DTS__ 打开 dts 分支）
-cpp -nostdinc \
-    -I ../../../../../include \
-    -I ../../../../../include/uapi \
-    -I . -I .. \
-    -undef -D__DTS__ -traditional -x assembler-with-cpp \
-    -o /tmp/aiot-pre.dts rk3588-aiot3588a.dts
-
-# 编译
-../../../../../scripts/dtc/dtc -I dts -O dtb -o /tmp/aiot.dtb /tmp/aiot-pre.dts
-
-# 反编译核对（看 status / phandle 连接）
-../../../../../scripts/dtc/dtc -I dtb -O dts -o /tmp/aiot-check.dts /tmp/aiot.dtb
-```
-
-### 5.5 DTS 里引用的内核头文件
-
-```c
-#include <dt-bindings/gpio/gpio.h>              // GPIO_ACTIVE_HIGH/LOW
-#include <dt-bindings/input/input.h>            // KEY_VOLUMEUP
-#include <dt-bindings/pinctrl/rockchip.h>       // RK_Pxx、RK_FUNC_GPIO
-#include <dt-bindings/pwm/pwm.h>                // PWM_POLARITY_INVERTED
-#include <dt-bindings/soc/rockchip,vop2.h>      // ROCKCHIP_VOP2_EP_EDP0/HDMI1
-#include <dt-bindings/usb/pd.h>                 // PDO_FIXED
-#include "rk3588.dtsi"                          // SoC 级定义（base+extra+opp+pinctrl）
-```
+| 症状 | 原因 | 解决 |
+|---|---|---|
+| 上电完全无串口输出 | loader 没写进 eMMC LBA 0x40，BootROM 直接进 Maskrom | `upgrade_tool db assets/MiniLoaderAll.bin` 后再 `uf` |
+| u-boot 提示 `Failed to load DTB, ret=-19` | 缺 resource 分区 / resource.img | 按 §4.5 加 resource 分区并放 `rk-kernel.dtb` |
+| u-boot 提示 `Unrecognized filesystem type` | boot 分区是 ext4，u-boot 没编 ext4 驱动 | boot 分区必须 FAT32 |
+| `Starting kernel ...` 后无输出 | console 参数缺失或 rootfs 挂载失败 | 确认 extlinux 的 `append` 有 `console=ttyS2,1500000n8`；`root=/dev/mmcblk2p5` |
+| 内核停在 `Freeing initrd memory` 后 | 板上没插 PCIe 设备时 pcie 驱动 async probe 卡死 | BSP dts 里 pcie2x1l1 仅在需要时 enable；或加 `pcie` 超时 |
+| `apt update` 在 chroot 里失败 | qemu/binfmt 没注册 | `apt install qemu-user-static`（Ubuntu 自动注册），Arch 装 `qemu-user-static-binfmt` |
+| 构建最后 `mkupdate 失败` | `assets/tools/` 可执行权限丢失 | `chmod +x assets/tools/*`（git 已记录 exec 位） |
 
 ---
 
-## 6. 本地构建
+## 11. 参考
 
-前置：Linux 主机、`sudo`、`curl`、`make`、`gzip`、`xz-utils`，磁盘 ≥ 10GB。
-
-```bash
-cd fnos-zerot1
-
-# 用默认参数（nanopc-t6 / 6.18.18 / 2026.09.23 / fnnas_rockchip_1253）
-sudo ./build-image.sh
-
-# 或指定底稿
-sudo BASE_BOARD=nanopc-t6 KERNEL_VER=6.18.18 BASE_DATE=2026.09.23 \
-     FNOS_RELEASE_TAG=fnnas_rockchip_1253 ./build-image.sh
-
-# 复用已下载的镜像和源码（跳过下载）
-sudo SKIP_DOWNLOAD=1 ./build-image.sh
-```
-
-产物：`output/fnos-fnnas-aiot3588a-k6.18.18-<日期>.img.gz`
-
-### 检查上游是否有更新
-
-```bash
-./scripts/check-upstream.py
-```
-
----
-
-## 7. GitHub Actions 构建
-
-`.github/workflows/build.yml` 提供两种触发方式：
-
-1. **手动触发**：Actions → `build-fnos-image` → Run workflow，可填
-   `base_board / base_date / kernel_ver / release_tag`
-2. **打 tag 触发**：`git tag v0.1.0 && git push origin v0.1.0` → 自动构建并创建 Release
-
-> 镜像约 700MB（压缩后），artifact 保留 30 天；走 tag 时会直接挂到 Release 上。
-> runner 需要清理磁盘（workflow 里已包含），否则空间不够。
-
----
-
-## 8. 烧录
-
-```bash
-# Linux
-sudo dd if=output/fnos-fnnas-aiot3588a-k6.18.18-20261020.img.gz of=/dev/sdX \
-        bs=4M status=progress conv=fsync
-
-# Windows：balenaEtcher / Rufus（直接选 .img.gz）
-```
-
-**救砖**：如果刷坏无法进系统，用 `assets/MiniLoaderAll.bin` + Rockchip `upgrade_tool`
-（按住 maskrom 或短接，见原厂文档）恢复 loader 后再烧完整镜像。
-
----
-
-## 9. 上电后验证清单
-
-```bash
-uname -r                                   # 应为 6.18.18
-cat /proc/device-tree/model                # "Shimeta AIOT-3588A (zeroT1)"
-dmesg | grep -iE 'edp|drm|panel'           # 应出现 panel-edp0 与 drm 初始化
-ls /sys/class/drm/                         # card0-eDP-1 应 connected
-cat /proc/asound/cards                     # 应有 es8388 声卡
-ls /dev/ttyS*                              # 应有 ttyS1/4/6/7/8
-ip link                                    # 应有 wlan0（AP6256）
-lsblk                                      # 应有 mmcblk2（eMMC）、sda（SATA/miniPCIe）
-```
-
----
-
-## 10. 已知限制 / 待验证项
-
-1. **ES8388 的 MCLK 输出门**：RK BSP 里靠一个自定义 `rockchip,clk-out` 节点
-   （`mclkout_i2s0`）打开 SYS_GRF 的 I2S0 MCLK "to_io" 栅极；**上游 6.18 没有这个驱动**
-   （`drivers/clk/rockchip/clk-out.c` 不存在），本 DTS 用标准
-   `clocks = <&cru I2S0_8CH_MCLKOUT>`。**如果耳机/喇叭无声**，需要把 BSP 的
-   clk-out 补丁打进 fnOS 内核，或改用外部 MCLK 方案。
-2. **IR 遥控**：原厂用 pwm3 的 `rockchip,remotectl-pwm` 驱动，上游没有，本 DTS 未启用。
-3. **WiFi 固件**：AP6256 = BCM43455，需要 `brcmfmac43455-sdio.bin/.txt` + nvram；
-   fnOS 镜像若未自带，需放到 `/lib/firmware/brcm/`。
-4. **蓝牙固件**：BCM4345C0 需要 `BCM4345C0.hcd`（`/lib/firmware/brcm/`）。
-5. **NPU**：上游 6.18 有 `rknn_core_0/1/2` 节点但没有 rknpu 驱动，NPU 不可用。
-6. **VPU 硬解/硬编**：上游 rkvenc/rkvdec 支持有限，NAS 场景一般不需要。
-7. **HDMI0**：与 eDP 共用 `hdptxphy0`，本板 eDP 优先，HDMI0 关闭。
-8. **HDMI IN**：`hdmi_receiver` 已启用，音频采集走 i2s7_8ch，待实物验证。
-
----
-
-## 11. 排错
-
-| 现象 | 排查 |
-|---|---|
-| 不启动、卡 u-boot | 串口 1500000 抓日志；确认 `DTB: rk-kernel.dtb` 后是否 `HASH(c): OK` |
-| 启动但黑屏 | `cat /proc/device-tree/model` 确认加载的是本板 dtb；`/sys/class/drm/card0-eDP-1/status` |
-| 镜像布局变了（mount 失败） | `fdisk -l 镜像` 看 p1 起始扇区，改 `build-image.sh` 的 `BOOT_OFFSET` |
-| dtb 编译报 label 不存在 | 多半是上游 dtsi 改了节点名，对照 `rk3588-base.dtsi` 修 |
-| 换内核版本后大量 probe 失败 | DTB 与内核版本不匹配，见第 2 节警告 |
-
----
-
-## 12. 参考
-
-- 上游镜像与打包框架：[ophub/fnnas](https://github.com/ophub/fnnas)
-- 同路线参考实现（ELF3588）：[zhangyada/fnos-elf3588](https://github.com/zhangyada/fnos-elf3588)
-- mainline NanoPC-T6 设备树：`arch/arm64/boot/dts/rockchip/rk3588-nanopc-t6.dtsi`
-- RK3588 上游 pinctrl：`rk3588-base-pinctrl.dtsi` / `rk3588-extra-pinctrl.dtsi`
+- ophub/fnnas（fnOS ARM 镜像打包器）：https://github.com/ophub/fnnas
+- zhangyada/fnos-elf3588（ELF3588 适配，本项目的思路模板）：https://github.com/zhangyada/fnos-elf3588
+- 友善 NanoPC-T6 wiki：https://wiki.friendlyelec.com/wiki/index.php/NanoPC-T6/zh
+- Rockchip SD-Fuse RK3588：https://github.com/friendlyarm/sd-fuse_rk3588

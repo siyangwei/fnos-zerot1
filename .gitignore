@@ -4,6 +4,16 @@
 *.img
 *.img.gz
 
+# 大型源码树 / 中间产物（构建时自动下载或生成，不入库）
+/kernel-rockchip/
+/uboot-rockchip/
+/rkbin/
+/rootfs/
+/fnos/
+/fnos-update/
+/boot/
+/prebuilts
+
 # Python
 __pycache__/
 *.pyc

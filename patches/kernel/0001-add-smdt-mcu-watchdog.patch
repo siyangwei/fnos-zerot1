@@ -1,0 +1,42 @@
+diff --git a/arch/arm64/configs/nanopi6_linux_defconfig b/arch/arm64/configs/nanopi6_linux_defconfig
+index 6413a5cde..f2bcee71c 100644
+--- a/arch/arm64/configs/nanopi6_linux_defconfig
++++ b/arch/arm64/configs/nanopi6_linux_defconfig
+@@ -1871,3 +1871,4 @@ CONFIG_DEBUG_CREDENTIALS=y
+ CONFIG_RCU_CPU_STALL_TIMEOUT=60
+ CONFIG_FUNCTION_TRACER=y
+ CONFIG_LKDTM=y
++CONFIG_SMDT_MCU_WATCHDOG=y
+diff --git a/drivers/watchdog/Kconfig b/drivers/watchdog/Kconfig
+index b64bc49c7..340562081 100644
+--- a/drivers/watchdog/Kconfig
++++ b/drivers/watchdog/Kconfig
+@@ -2204,4 +2204,19 @@ config KEEMBAY_WATCHDOG
+ 	  To compile this driver as a module, choose M here: the
+ 	  module will be called keembay_wdt.
+ 
++config SMDT_MCU_WATCHDOG
++	tristate "SMDT AIOT-3588A onboard MCU watchdog"
++	depends on I2C
++	select WATCHDOG_CORE
++	help
++	  Watchdog driver for the STM8S00K3 companion MCU on the SMDT
++	  AIOT-3588A (RK3588) carrier board.  The MCU sits on i2c-6 at
++	  address 0x62 and resets the SoC if it is not kicked; without a
++	  kicker the board reboots after roughly 603 seconds.  This driver
++	  kicks the MCU from the kernel and reports the MCU status
++	  registers, including a hint about the previous reset.
++
++	  To compile this driver as a module, choose M here: the module
++	  will be called smdt_mcu_wdt.
++
+ endif # WATCHDOG
+diff --git a/drivers/watchdog/Makefile b/drivers/watchdog/Makefile
+index d41e5f830..7252671dd 100644
+--- a/drivers/watchdog/Makefile
++++ b/drivers/watchdog/Makefile
+@@ -229,3 +229,4 @@ obj-$(CONFIG_MENZ069_WATCHDOG) += menz69_wdt.o
+ obj-$(CONFIG_RAVE_SP_WATCHDOG) += rave-sp-wdt.o
+ obj-$(CONFIG_STPMIC1_WATCHDOG) += stpmic1_wdt.o
+ obj-$(CONFIG_SL28CPLD_WATCHDOG) += sl28cpld_wdt.o
++obj-$(CONFIG_SMDT_MCU_WATCHDOG) += smdt_mcu_wdt.o

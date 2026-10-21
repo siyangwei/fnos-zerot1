@@ -2,18 +2,29 @@
 
 **fnOS（飞牛 NAS 系统 / fnNAS）for 视美泰 AIOT-3588A（RK3588）**
 
-把 [fnOS](https://www.fnnas.com/) 移植到视美泰 AIOT-3588A 核心板（本项目内部代号 zeroT1）。
+把 [fnOS](https://www.fnnas.com/) 移植到视美泰 AIOT-3588A 核心板（内部代号 zeroT1）。
 
-不重打包 rootfs，而是沿用 ophub 的通用 RK3588 镜像，**只替换板级设备树（DTB）**：
+**同一路线参考**：[zhangyada/fnos-elf3588](https://github.com/zhangyada/fnos-elf3588) ·
+**镜像打包框架**：[ophub/fnnas](https://github.com/ophub/fnnas)
+
+---
+
+## 技术路线
 
 ```
-ophub 官方镜像（nanopc-t6 / mainline 6.18.18）
-   └── 替换 /boot/dtb/rockchip/rk3588-aiot3588a.dtb
-   └── armbianEnv.txt: fdtfile=rockchip/rk3588-aiot3588a.dtb
-   └── 重新打包 .img.gz
+fnOS 官方 rootfs（Debian 12 + 飞牛服务，来自 ophub nanopc-t6 镜像）
+        +
+友善 u-boot（nanopi6-v2017.09，含 distro_bootcmd 扫描全部分区补丁）
+        +
+友善 Linux 6.1.141 内核（BSP 驱动：eDP/HDMI/ES8388/WiFi/BT/PCIe/SATA/看门狗）
+        +
+本板设备树 dts/rk3588-aiot3588a.dts
+        ↓
+update.img（Rockchip 打包格式，upgrade_tool uf 烧录）
 ```
 
-**同一路线参考**：[zhangyada/fnos-elf3588](https://github.com/zhangyada/fnos-elf3588)
+> 早期方案是「ophub 镜像 + mainline 6.18 DTB 替换」；mainline 的 eDP/HDMI 驱动不完整、
+> WiFi/BT 固件缺失、无法方便地加看门狗驱动，因此改为「友善内核 + 飞牛 rootfs」重新打包。
 
 ---
 
@@ -28,78 +39,77 @@ ophub 官方镜像（nanopc-t6 / mainline 6.18.18）
 | 音频 | ES8388（耳机 + 扬声器） |
 | 网络 | 千兆以太网（GMAC1）+ AP6256 WiFi/BT |
 | 串口 | 5 路：TTL-1/2、RS232-4/5、RS485-3（+ 调试串口 uart2） |
-| 其他 | RTC(hym8563)、USB-C(OTG+PD)、3×USB Host、风扇(PWM)、ADC 按键 |
+| 其他 | RTC(hym8563)、USB-C(OTG+PD)、3×USB Host、风扇(PWM)、ADC 按键、板载 MCU 看门狗 |
 
 ---
 
 ## 快速开始
 
-### 直接用预编译镜像
-
-从 [Releases](../../releases) 下载 `fnos-fnnas-aiot3588a-k*.img.gz`，用 balenaEtcher 或 `dd` 写入 SD/TF 卡或 eMMC。
+### 用 Release 镜像（推荐）
 
 ```bash
-sudo dd if=fnos-fnnas-aiot3588a-k6.18.18-*.img.gz of=/dev/sdX bs=4M status=progress conv=fsync
+# 下载 fnos-aiot3588a-update-*.img.gz → 解压
+gunzip fnos-aiot3588a-update-*.img.gz
+
+# 板子进 Maskrom/Loader（USB 2207:350b）
+upgrade_tool db assets/MiniLoaderAll.bin     # Maskrom 下必须先下载 loader
+upgrade_tool uf fnos-aiot3588a-update-*.img  # 约 5.8GB，USB2 需要 5~10 分钟
+upgrade_tool rd
 ```
+
+默认登录：`root` / `root`。串口调试：`/dev/ttyACM0`，1500000 8N1（USB 双串口模块）。
 
 ### 自己构建
 
 ```bash
-sudo ./build-image.sh
+# 依赖：base-devel gcc-aarch64-linux-gnu qemu-user-static btrfs-progs dosfstools mtools bc
+sudo ./scripts/build-all.sh
+# 产物：output/fnos-aiot3588a-update-YYYYMMDD.img
 ```
 
-产物在 `output/`。需要 ~10GB 磁盘与 `sudo`（挂载 boot 分区）。
+详细步骤（内核命令、分区布局、为什么要 resource 分区、为什么 boot 是 FAT32……）见
+**[docs/BUILD.md](docs/BUILD.md)**。
 
 ### GitHub Actions
 
-仓库 Actions → `build-fnos-image` → Run workflow，或打 tag 自动出 Release。
+Actions → 工作流 `build-fnos-image` → Run workflow（可勾选「跳过 XFCE」做快速验证构建）；
+打 tag（`v*`）会自动构建并发布 Release（附件含 `update.img.gz` 与 `SHA256SUMS`）。
 
 ---
 
-## 目录
+## 目录结构
 
 ```
-dts/rk3588-aiot3588a.dts   板级设备树（本项目核心，基于 mainline v6.18 NanoPC-T6 裁剪）
-build-image.sh             一键构建脚本
-scripts/check-upstream.py  检查 ophub 上游更新
-docs/BUILD.md              完整构建文档（用到的文件、内核命令、排错）
-assets/MiniLoaderAll.bin   救砖用 loader（可选）
+dts/         板级设备树（BSP 版，来自已验证的 RK BSP 树）
+patches/     u-boot / 内核 / rootfs 补丁（全部可用脚本复现）
+assets/      预编译复用资源：loader、uboot.img、WiFi/BT 固件、Rockchip 打包工具
+scripts/     构建脚本（build-all / build-rootfs / build-kernel / pack-image）
+docs/        BUILD.md 构建文档
 ```
 
 ---
 
-## 设备树改动要点
+## 已适配的功能
 
-相对 NanoPC-T6 上游 DTS 的主要差异（详细注释见 `dts/rk3588-aiot3588a.dts` 头部）：
-
-- 主显示 **eDP**（`hdptxphy0` + `edp0` → VOP **VP1**），HDMI0 与 eDP 共用 PHY 故关闭
-- HDMI 输出走 **HDMI1**（`hdptxphy1` → VOP **VP0**）
-- 音频 **ES8388**（i2c7 0x1b / i2s0_8ch），耳机检测 GPIO4_C2、功放使能 GPIO4_A3
-- **NPU 电源在 i2c1**（rk8602），CPU 大核在 i2c0
-- **5V 外设电源 GPIO3_D5 必须 always-on**（否则 eDP AUX 无应答、USB 不工作）
-- 5 路业务串口 uart1/4/6/7/8 + uart9(蓝牙)
-- 风扇 pwm12、SATA0、miniPCIe(pcie2x1l1)
-
----
-
-## 已知限制
-
-| 项目 | 状态 |
+| 功能 | 状态 |
 |---|---|
-| eDP / HDMI1 显示 | ✅ 设备树完整，待实物验证 |
-| 串口 ×5 | ✅ |
-| ES8388 音频 | ⚠ 上游无 `rockchip,clk-out` 驱动，MCLK 门控可能需补丁（见 docs/BUILD.md §10） |
-| WiFi AP6256 | ⚠ 需要 brcmfmac 固件/nvram |
-| 蓝牙 AP6256 | ⚠ 需要 BCM4345C0.hcd |
-| NPU | ❌ 上游 6.18 无 rknpu 驱动 |
-| IR 遥控 | ❌ 上游无 remotectl 驱动 |
-| GPU | ⚠ 依赖 panthor 驱动 |
+| eDP 显示（1920x1080） | ✅ 已验证（fnOS 默认 headless，装 XFCE 后出桌面） |
+| 5 路串口（ttyS1/4/6/7/8）+ 蓝牙 ttyS9 | ✅ 预期可用（BSP dts 已 enable） |
+| ES8388 音频（耳机/喇叭） | ⚠️ 待实物验证 |
+| WiFi AP6256 / 蓝牙 AP6256 | ⚠️ 固件已装，待实物验证 |
+| 千兆以太网 | ⚠️ 待实物验证 |
+| 风扇（pwm12 + thermal trip） | ✅ 预期可用 |
+| 板载 MCU 看门狗 | ✅ 驱动已编译（`smdt_mcu_wdt`）+ systemd RuntimeWatchdogSec |
+| miniPCIe（4G EC20 / 2230 SSD） | ✅ 硬件通路就绪（EC20 走 USB，SSD 走 pcie2x1l1） |
+| SATA0 | ✅ 预期可用 |
+| HDMI OUT / HDMI IN | ⚠️ 待实物验证 |
+| XFCE 桌面 + lightdm 自动登录 root | ✅ 构建时安装（`patches/rootfs/40-xfce.sh`） |
+| Linux adb / adbd | ✅ 构建时安装（`patches/rootfs/30-adb.sh`） |
 
 ---
 
-## 致谢
+## 许可
 
-- [ophub/fnnas](https://github.com/ophub/fnnas) —— fnOS RK3588 镜像打包框架
-- [zhangyada/fnos-elf3588](https://github.com/zhangyada/fnos-elf3588) —— 同路线参考
-- FriendlyElec NanoPC-T6 上游设备树
-- 视美泰原厂固件与硬件资料
+本项目只包含板级适配文件（dts / patch / 构建脚本）。
+fnOS rootfs 版权归[飞牛](https://www.fnnas.com/)所有；内核与 u-boot 来自
+[friendlyarm](https://github.com/friendlyarm)（GPL-2.0）。
