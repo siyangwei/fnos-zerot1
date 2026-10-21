@@ -14,7 +14,7 @@ set -euo pipefail
 
 ROOTFS="${1:?usage: $0 <rootfs-dir>}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
-source "$HERE/../scripts/lib-chroot.sh"
+source "$HERE/../../scripts/lib-chroot.sh"
 
 mkdir -p "$ROOTFS/etc/systemd/system.conf.d"
 cat > "$ROOTFS/etc/systemd/system.conf.d/10-watchdog.conf" <<'EOF'

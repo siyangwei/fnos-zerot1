@@ -9,7 +9,7 @@ set -euo pipefail
 
 ROOTFS="${1:?usage: $0 <rootfs-dir>}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
-source "$HERE/../scripts/lib-chroot.sh"
+source "$HERE/../../scripts/lib-chroot.sh"
 
 # 没有 qemu 就跳过（GitHub Actions 上有；本地没装时先构建出系统，后续再补）
 if [ ! -x "$QEMU_BIN" ]; then

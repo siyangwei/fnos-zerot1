@@ -18,7 +18,7 @@ source "$HERE/lib-common.sh"
 KERNEL_REPO="${KERNEL_REPO:-https://github.com/friendlyarm/kernel-rockchip}"
 KERNEL_BRANCH="${KERNEL_BRANCH:-nanopi6-v6.1.y}"
 KERNEL_DEFCONFIG="${KERNEL_DEFCONFIG:-nanopi6_linux_defconfig}"
-KERNEL_DIR="$WORK_DIR/kernel-rockchip"
+KERNEL_DIR="${KERNEL_DIR:-$WORK_DIR/kernel-rockchip}"
 JOBS="$(nproc)"
 
 : "${ROOTFS:?ROOTFS 未设置}"

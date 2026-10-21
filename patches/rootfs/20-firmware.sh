@@ -24,8 +24,10 @@ cp -f "$FW_SRC/brcm/brcmfmac43456-sdio.txt" "$FW_DST/brcm/"
 cp -f "$FW_SRC/BCM4345C0.hcd" "$FW_DST/"
 
 # 无线监管数据库（否则 wpa_supplicant 起动时报警）
-[ -f "$FW_SRC/regulatory.db" ]     && cp -f "$FW_SRC/regulatory.db" "$FW_DST/"
-[ -f "$FW_SRC/regulatory.db.p7s" ] && cp -f "$FW_SRC/regulatory.db.p7s" "$FW_DST/"
+# 注意：Debian 的 regulatory.db 是 -> /etc/alternatives/... 的符号链接（在 chroot 外看是悬空），
+# cp 默认拒绝写入悬空链接目标，必须用 --remove-destination 先删掉链接再放真实文件
+[ -f "$FW_SRC/regulatory.db" ]     && cp -f --remove-destination "$FW_SRC/regulatory.db" "$FW_DST/"
+[ -f "$FW_SRC/regulatory.db.p7s" ] && cp -f --remove-destination "$FW_SRC/regulatory.db.p7s" "$FW_DST/"
 
 # 兼容 /lib/firmware 是真实目录（不是 /usr/lib 的软链）的发行版
 if [ -d "$ROOTFS/lib/firmware" ] && [ ! -e "$ROOTFS/lib/firmware/brcm/brcmfmac43456-sdio.bin" ]; then

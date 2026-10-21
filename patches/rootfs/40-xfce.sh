@@ -10,7 +10,7 @@ set -euo pipefail
 ROOTFS="${1:?usage: $0 <rootfs-dir> [--xrdp]}"
 WITH_XRDP="${2:-}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
-source "$HERE/../scripts/lib-chroot.sh"
+source "$HERE/../../scripts/lib-chroot.sh"
 
 # 没有 qemu 就跳过（GitHub Actions 上有 qemu-user-static）
 if [ ! -x "$QEMU_BIN" ]; then

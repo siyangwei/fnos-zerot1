@@ -22,3 +22,6 @@ __pycache__/
 .vscode/
 .idea/
 *.swp
+
+# 旧路线 A 中间产物
+/out/
