@@ -5,11 +5,13 @@
 # 友善的 sd-fuse prebuilt/firmware 里自带这些固件，本项目把它们
 # 放进 assets/firmware/（已入库，构建时无需再下载）。
 #
-# 用法: 20-firmware.sh <rootfs-dir> <assets-dir>
+# 用法: 20-firmware.sh <rootfs-dir> [assets-dir]
+#   assets-dir 可省略，默认 <project>/assets
 set -euo pipefail
 
-ROOTFS="${1:?usage: $0 <rootfs-dir> <assets-dir>}"
-ASSETS="${2:?usage: $0 <rootfs-dir> <assets-dir>}"
+ROOTFS="${1:?usage: $0 <rootfs-dir> [assets-dir]}"
+HERE="$(cd "$(dirname "$0")" && pwd)"
+ASSETS="${2:-$HERE/../../assets}"
 
 FW_DST="$ROOTFS/usr/lib/firmware"
 FW_SRC="$ASSETS/firmware"

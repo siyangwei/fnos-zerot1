@@ -17,6 +17,21 @@ need_root
 BOOT_OFFSET=$((32768 * 512))       # fnOS 底稿 GPT 第 1 分区（boot，ext4，仅供识别）
 ROOTFS_OFFSET=$((1081344 * 512))   # fnOS 底稿 GPT 第 2 分区（rootfs，btrfs）
 
+# ---- 0. 快速路径：SKIP_ROOTFS_EXTRACT=1 且 rootfs 已存在 → 跳过下载/解压/提取 ----
+# （底稿镜像 1.75GB 下载 + 6.6GB 解压在 GitHub 限速/网络不稳时非常耗时；
+#   复用已提取的 rootfs 时完全没必要再走这一段）
+apply_rootfs_patches() {
+    # 补丁编排交给 patch-rootfs.sh（可用 --only 单跑某个补丁）
+    bash "$PROJECT_DIR/scripts/patch-rootfs.sh" "$ROOTFS"
+}
+
+if [ "${SKIP_ROOTFS_EXTRACT:-0}" = "1" ] && [ -d "$ROOTFS/etc" ]; then
+    log "SKIP_ROOTFS_EXTRACT=1：复用现有 rootfs ($(du -sh "$ROOTFS" | cut -f1))，跳过底稿下载/解压"
+    apply_rootfs_patches
+    log "rootfs 准备完成: $(du -sh "$ROOTFS" | cut -f1)"
+    exit 0
+fi
+
 # ---- 1. 下载 + 解压底稿镜像 ----
 # 兼容已有的其他命名（比如手动下载的 fnnas_rockchip_nanopc-t6_*.img）
 if [ ! -f "$FNOS_IMG" ]; then

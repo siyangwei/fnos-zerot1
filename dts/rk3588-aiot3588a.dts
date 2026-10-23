@@ -316,7 +316,14 @@
 		BT,reset_gpio = <&gpio0 RK_PC6 GPIO_ACTIVE_HIGH>;
 		BT,wake_gpio = <&gpio0 RK_PC5 GPIO_ACTIVE_HIGH>;
 		BT,wake_host_irq = <&gpio0 RK_PA0 GPIO_ACTIVE_HIGH>;
-		status = "okay";
+		/*
+		 * ★ 改用标准 Linux serdev 蓝牙栈（见下方 &uart9 的 bluetooth 子节点）。
+		 *   BSP 的 bluetooth-platdata（net/rfkill/rfkill-bt.c）会独占
+		 *   GPIO0_PC6(复位) / GPIO0_PC5(wake) / GPIO0_PA0(host wake)，与
+		 *   hci_bcm 的 shutdown/device-wakeup/host-wakeup 冲突（-EBUSY），
+		 *   因此这里 disable，仅保留节点作为引脚说明。
+		 */
+		status = "disabled";
 	};
 
 	wireless_wlan: wireless-wlan {
@@ -859,6 +866,24 @@
 	status = "okay";
 	pinctrl-names = "default";
 	pinctrl-0 = <&uart9m0_xfer &uart9m0_ctsn>;
+
+	/*
+	 * AP6256 = BCM4345（WiFi SDIO + BT UART）。
+	 * 用 mainline 标准 serdev 方式挂 HCI：hci_bcm 驱动会负责
+	 *   1) 上电时序（shutdown-gpios = BT_REG_ON）
+	 *   2) 下载 BCM4345C0.hcd 固件（rootfs /lib/firmware/）
+	 *   3) 把波特率从 115200 切到 max-speed
+	 * 这样 TTY 层不参与，吞吐和稳定性都比 hciattach/btattach 好。
+	 */
+	bluetooth {
+		compatible = "brcm,bcm43438-bt";
+		clocks = <&hym8563>;
+		clock-names = "lpo";
+		device-wakeup-gpios = <&gpio0 RK_PC5 GPIO_ACTIVE_HIGH>;
+		host-wakeup-gpios = <&gpio0 RK_PA0 GPIO_ACTIVE_HIGH>;
+		shutdown-gpios = <&gpio0 RK_PC6 GPIO_ACTIVE_HIGH>;
+		max-speed = <1500000>;
+	};
 };
 
 /* ============================================================================

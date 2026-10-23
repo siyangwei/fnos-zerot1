@@ -99,7 +99,7 @@ ATAG: 0x00200800
 MACHINE: 0xffffffff
 CHECK_MASK: 0x80
 PACKAGE_FILE: parameter.txt
-CMDLINE: mtdparts=rk29xxnand:0x00002000@0x00004000(uboot),0x00002000@0x00006000(misc),0x00008000@0x00008000(resource),0x00020000@0x00010000(boot),0x$(printf '%08x' $ROOTFS_SIZE)@0x$(printf '%08x' $ROOTFS_START)(rootfs),-@0x$(printf '%08x' $USERDATA_START)(userdata:grow)
+CMDLINE: mtdparts=rk29xxnand:0x00002000@0x00004000(uboot),0x00002000@0x00006000(misc),0x00008000@0x00008000(resource),0x00020000@0x00010000(boot),0x$(printf '%08x' $ROOTFS_SIZE)@0x$(printf '%08x' $ROOTFS_START)(rootfs)
 uuid:rootfs=357e9eb7-73ea-4367-b981-6296a97687e0
 EOF
 

@@ -38,15 +38,9 @@ fi
 ln -sfn "$RKBIN_DIR" "$(dirname "$UBOOT_DIR")/rkbin"
 
 cd "$UBOOT_DIR"
-# 打本项目补丁（幂等：已应用则跳过）
-for p in "$PROJECT_DIR"/patches/uboot/*.patch; do
-    [ -e "$p" ] || continue
-    if git apply --check "$p" 2>/dev/null; then
-        git apply "$p"; log "applied $(basename "$p")"
-    else
-        log "skip (already applied) $(basename "$p")"
-    fi
-done
+# 打本项目 u-boot 补丁（按版本自动选目录）
+log "应用 u-boot 补丁（scripts/patch-uboot.sh）"
+bash "$PROJECT_DIR/scripts/patch-uboot.sh" "$UBOOT_DIR"
 
 log "编译 u-boot（make.sh nanopi6）"
 ./make.sh nanopi6

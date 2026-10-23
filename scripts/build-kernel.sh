@@ -45,29 +45,11 @@ if [ ! -d "$KERNEL_DIR" ]; then
 fi
 cd "$KERNEL_DIR"
 
-# ---- 应用本项目的内核补丁 + 板级 dts + 驱动源码 ----
-log "应用内核补丁"
-for p in "$PROJECT_DIR"/patches/kernel/*.patch; do
-    [ -e "$p" ] || continue
-    if git apply --check "$p" 2>/dev/null; then
-        git apply "$p"
-        log "  applied $(basename "$p")"
-    else
-        log "  skip (already applied?) $(basename "$p")"
-    fi
-done
-
-# 驱动源码（patch 里只有 Kconfig/Makefile/defconfig，大文件单独拷）
-if [ -d "$PROJECT_DIR/patches/kernel/files" ]; then
-    cp -f "$PROJECT_DIR"/patches/kernel/files/* drivers/watchdog/ 2>/dev/null || true
-fi
-
-# 板级 dts
-cp -f "$PROJECT_DIR/dts/rk3588-aiot3588a.dts" arch/arm64/boot/dts/rockchip/
-# dts Makefile 注册（幂等）
-if ! grep -q 'rk3588-aiot3588a.dtb' arch/arm64/boot/dts/rockchip/Makefile; then
-    echo 'dtb-$(CONFIG_ARCH_ROCKCHIP) += rk3588-aiot3588a.dtb' >> arch/arm64/boot/dts/rockchip/Makefile
-fi
+# ---- 应用本项目的内核补丁（按内核版本自动选目录）----
+# 补丁/新增文件/板级 dts 的落位逻辑全部在 scripts/patch-kernel.sh，
+# 这里只负责调用，便于单独调试（可手工跑 patch-kernel.sh）。
+log "应用内核补丁（scripts/patch-kernel.sh）"
+bash "$PROJECT_DIR/scripts/patch-kernel.sh" "$KERNEL_DIR"
 
 # ---- 配置 ----
 log "生成 .config ($KERNEL_DEFCONFIG)"
@@ -75,7 +57,9 @@ make -s ARCH=arm64 CROSS_COMPILE="$CROSS_COMPILE" "$KERNEL_DEFCONFIG"
 
 # ---- 编译 ----
 log "编译 Image + modules (-j$JOBS)"
-make -j"$JOBS" ARCH=arm64 CROSS_COMPILE="$CROSS_COMPILE" Image modules
+# 注意：必须显式带上 dtb 目标，否则改 dts 后 dtb 不会重编
+# （旧版只编 Image modules，导致 dts 改动进不了 dtb，eDP/蓝牙节点缺失）
+make -j"$JOBS" ARCH=arm64 CROSS_COMPILE="$CROSS_COMPILE" Image modules rockchip/rk3588-aiot3588a.dtb
 
 # ---- 产物 ----
 mkdir -p "$IMAGE_DIR/dtb/rockchip"
