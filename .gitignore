@@ -25,3 +25,4 @@ __pycache__/
 
 # 旧路线 A 中间产物
 /out/
+assets/tools/package-file-tmp
