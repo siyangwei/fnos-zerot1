@@ -30,8 +30,19 @@ chroot_mount() {
     # 挂载点
     mkdir -p "$rootfs"/{proc,sys,dev,dev/pts,tmp,run}
     mountpoint -q "$rootfs/proc"     || mount -t proc proc "$rootfs/proc"
-    mountpoint -q "$rootfs/sys"      || mount --rbind /sys "$rootfs/sys"
-    mountpoint -q "$rootfs/dev"      || mount --rbind /dev "$rootfs/dev"
+    # ★★ 关键：mount --rbind 会保留 shared mount propagation —— chroot 内对子挂载
+    # （/sys/fs/cgroup、/dev/mqueue、/dev/shm 等）的任何挂载/卸载都会**传播回宿主机**。
+    # 2026-10-22 两次把宿主机的 cgroup2 卸载掉，导致 systemd 无法创建 cgroup、
+    # 所有 GUI 程序无法启动（polkit/kwin 全挂），只能强制重启。
+    # 修复：每次 rbind 后立刻 --make-rslave（单向传播：只从宿主→chroot，不回传）。
+    if ! mountpoint -q "$rootfs/sys"; then
+        mount --rbind /sys "$rootfs/sys"
+        mount --make-rslave "$rootfs/sys"
+    fi
+    if ! mountpoint -q "$rootfs/dev"; then
+        mount --rbind /dev "$rootfs/dev"
+        mount --make-rslave "$rootfs/dev"
+    fi
     mountpoint -q "$rootfs/dev/pts"  || mount -t devpts devpts "$rootfs/dev/pts"
 
     echo "[chroot] mounted $rootfs"
@@ -39,10 +50,11 @@ chroot_mount() {
 
 chroot_umount() {
     local rootfs="$1"
-    umount -l "$rootfs/dev/pts" 2>/dev/null || true
-    umount -l "$rootfs/dev"     2>/dev/null || true
-    umount -l "$rootfs/sys"     2>/dev/null || true
-    umount -l "$rootfs/proc"    2>/dev/null || true
+    # 用 -R 递归卸载（先子后父）；不要用 -l（lazy umount 会留下子挂载，
+    # systemd 之后处理这些残留 mount unit 时又可能触发传播问题）
+    umount -R "$rootfs/dev" 2>/dev/null || true
+    umount -R "$rootfs/sys" 2>/dev/null || true
+    umount -R "$rootfs/proc" 2>/dev/null || true
     echo "[chroot] unmounted $rootfs"
 }
 
