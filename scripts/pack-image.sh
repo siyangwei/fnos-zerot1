@@ -18,8 +18,13 @@ source "$HERE/lib-common.sh"
 
 need_root
 : "${ROOTFS:?}"
-[ -f "$IMAGE_DIR/Image" ] || die "缺少 $IMAGE_DIR/Image（先跑 build-kernel.sh）"
-[ -f "$IMAGE_DIR/dtb/rockchip/rk3588-aiot3588a.dtb" ] || die "缺少 dtb"
+if [ -n "${FNOS_BOOT:-}" ] && [ -f "$FNOS_BOOT/Image" ]; then
+    BOOT_MODE="fnos"
+else
+    BOOT_MODE="bsp"
+    [ -f "$IMAGE_DIR/Image" ] || die "缺少 $IMAGE_DIR/Image（先跑 build-kernel.sh，或设 FNOS_BOOT 指向 fnOS boot 目录）"
+fi
+[ -f "$IMAGE_DIR/dtb/rockchip/rk3588-aiot3588a.dtb" ] || die "缺少 dtb（先跑 build-dts.sh）"
 
 UBOOT_START=0x4000;  UBOOT_SIZE=0x2000
 MISC_START=0x6000;   MISC_SIZE=0x2000
@@ -55,37 +60,63 @@ cp -f "$IMAGE_DIR/dtb/rockchip/rk3588-aiot3588a.dtb" "$UPDATE_DIR/res/rk-kernel.
 "$ASSETS_DIR/tools/resource_tool" --pack --root="$UPDATE_DIR/res" \
     --image="$UPDATE_DIR/resource.img" "$UPDATE_DIR/res/rk-kernel.dtb" >/dev/null
 
-# ---- 4. boot.img（64MB FAT32：Image + dtb + extlinux.conf）----
-log "生成 boot.img (64MB FAT32)"
-BOOT_SRC="$UPDATE_DIR/boot"
-mkdir -p "$BOOT_SRC/dtb/rockchip" "$BOOT_SRC/extlinux"
-cp -f "$IMAGE_DIR/Image" "$BOOT_SRC/Image"
-cp -f "$IMAGE_DIR/dtb/rockchip/rk3588-aiot3588a.dtb" "$BOOT_SRC/dtb/rockchip/"
-cat > "$BOOT_SRC/extlinux/extlinux.conf" <<'EOF'
+# ---- 4. boot.img（FAT32）----
+# 两种布局：
+#   A) fnOS 官方内核布局（默认）：Image + uInitrd + dtb/ + armbianEnv.txt + boot.scr
+#      内核来自 ophub kernel_fnnas 的 boot-rockchip 包，boot.scr 由 fnOS 原版提供；
+#      BSP 内核缺少 fnOS 私有 trimafs，无法运行管理界面，故必须用官方内核。
+#   B) 友善 BSP 内核布局（备用）：Image + dtb/ + extlinux/extlinux.conf
+if [ -n "${FNOS_BOOT:-}" ] && [ -f "$FNOS_BOOT/Image" ]; then
+    log "生成 boot.img (fnOS 内核布局, FAT32 ${BOOT_SIZE} 扇区)"
+    BOOT_SRC="$UPDATE_DIR/boot"
+    rm -rf "$BOOT_SRC"
+    mkdir -p "$BOOT_SRC"
+    cp -a "$FNOS_BOOT/." "$BOOT_SRC/"
+    # 确保 dtb 是我们板子的
+    mkdir -p "$BOOT_SRC/dtb/rockchip"
+    cp -f "$IMAGE_DIR/dtb/rockchip/rk3588-aiot3588a.dtb" "$BOOT_SRC/dtb/rockchip/"
+    truncate -s $(( BOOT_SIZE * 512 )) "$UPDATE_DIR/boot.img"
+    mkfs.vfat -F 32 -n BOOT "$UPDATE_DIR/boot.img" >/dev/null
+    mcopy -s -i "$UPDATE_DIR/boot.img" "$BOOT_SRC/"* ::/ 2>/dev/null || \
+        ( cd "$BOOT_SRC" && for f in *; do mcopy -s -i "$UPDATE_DIR/boot.img" "$f" "::/$f"; done )
+    log "boot.img 内容："; mdir -i "$UPDATE_DIR/boot.img" ::/ | head -12
+else
+    log "生成 boot.img (BSP 内核布局, FAT32 ${BOOT_SIZE} 扇区)"
+    BOOT_SRC="$UPDATE_DIR/boot"
+    mkdir -p "$BOOT_SRC/dtb/rockchip" "$BOOT_SRC/extlinux"
+    cp -f "$IMAGE_DIR/Image" "$BOOT_SRC/Image"
+    cp -f "$IMAGE_DIR/dtb/rockchip/rk3588-aiot3588a.dtb" "$BOOT_SRC/dtb/rockchip/"
+    cat > "$BOOT_SRC/extlinux/extlinux.conf" <<'EOF'
 label fnos
     kernel /Image
     fdt /dtb/rockchip/rk3588-aiot3588a.dtb
     append root=/dev/mmcblk2p5 rootfstype=btrfs rootwait rw console=ttyS2,1500000n8 console=tty0 net.ifnames=0 max_loop=128 earlycon=uart8250,mmio32,0xfeb50000
 EOF
-truncate -s $(( BOOT_SIZE * 512 )) "$UPDATE_DIR/boot.img"
-mkfs.vfat -F 32 -n BOOT "$UPDATE_DIR/boot.img" >/dev/null
-mcopy -s -i "$UPDATE_DIR/boot.img" "$BOOT_SRC/Image" ::/Image
-mcopy -s -i "$UPDATE_DIR/boot.img" "$BOOT_SRC/../boot/dtb" ::/ 2>/dev/null || \
-    ( mdir -i "$UPDATE_DIR/boot.img" ::/ >/dev/null 2>&1; mcopy -s -i "$UPDATE_DIR/boot.img" "$BOOT_SRC/dtb" ::/dtb )
-mcopy -s -i "$UPDATE_DIR/boot.img" "$BOOT_SRC/extlinux" ::/extlinux
+    truncate -s $(( BOOT_SIZE * 512 )) "$UPDATE_DIR/boot.img"
+    mkfs.vfat -F 32 -n BOOT "$UPDATE_DIR/boot.img" >/dev/null
+    mcopy -s -i "$UPDATE_DIR/boot.img" "$BOOT_SRC/Image" ::/Image
+    mcopy -s -i "$UPDATE_DIR/boot.img" "$BOOT_SRC/dtb" ::/dtb
+    mcopy -s -i "$UPDATE_DIR/boot.img" "$BOOT_SRC/extlinux" ::/extlinux
+fi
 
 # ---- 5. rootfs.img（btrfs，UUID 与 fstab 一致）----
-log "生成 rootfs.img (${ROOTFS_MB}MB btrfs)"
+# 设 ROOTFS_IMG_REUSE=<现成 rootfs.img> 可跳过 rsync（仅改 boot/uboot 时提速）
 ROOTFS_IMG="$UPDATE_DIR/rootfs.img"
-truncate -s $(( ROOTFS_SIZE * 512 )) "$ROOTFS_IMG"
-mkfs.btrfs -L rootfs -U 357e9eb7-73ea-4367-b981-6296a97687e0 -f "$ROOTFS_IMG" >/dev/null
-MNT="$WORK_DIR/mnt-rootfs"
-mkdir -p "$MNT"
-mount -o loop,compress=zstd:1 "$ROOTFS_IMG" "$MNT"
-rsync -aHAX --numeric-ids "$ROOTFS/" "$MNT/"
-sync
-umount "$MNT"
-rmdir "$MNT"
+if [ -n "${ROOTFS_IMG_REUSE:-}" ] && [ -f "$ROOTFS_IMG_REUSE" ]; then
+    log "复用现成 rootfs.img: $ROOTFS_IMG_REUSE"
+    cp -f "$ROOTFS_IMG_REUSE" "$ROOTFS_IMG"
+else
+    log "生成 rootfs.img (${ROOTFS_MB}MB btrfs)"
+    truncate -s $(( ROOTFS_SIZE * 512 )) "$ROOTFS_IMG"
+    mkfs.btrfs -L rootfs -U 357e9eb7-73ea-4367-b981-6296a97687e0 -f "$ROOTFS_IMG" >/dev/null
+    MNT="$WORK_DIR/mnt-rootfs"
+    mkdir -p "$MNT"
+    mount -o loop,compress=zstd:1 "$ROOTFS_IMG" "$MNT"
+    rsync -aHAX --numeric-ids "$ROOTFS/" "$MNT/"
+    sync
+    umount "$MNT"
+    rmdir "$MNT"
+fi
 
 # ---- 6. parameter.txt ----
 log "生成 parameter.txt"
