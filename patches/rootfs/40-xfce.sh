@@ -40,7 +40,9 @@ apt-get install -y --no-install-recommends \
     dbus-x11 dbus-user-session policykit-1 \
     xfce4 xfce4-session xfce4-terminal xfce4-panel xfce4-settings \
     xfwm4 xfdesktop4 xfce4-power-manager \
-    lightdm lightdm-gtk-greeter
+    lightdm lightdm-gtk-greeter \
+    pulseaudio pulseaudio-utils \
+    network-manager-gnome blueman
 ' || echo "[40-xfce] WARN: 部分包安装失败（检查网络/源）"
 
 if [ "$WITH_XRDP" = "--xrdp" ]; then
