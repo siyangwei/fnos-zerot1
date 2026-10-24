@@ -67,7 +67,7 @@ cp -f "$IMAGE_DIR/dtb/rockchip/rk3588-aiot3588a.dtb" "$UPDATE_DIR/res/rk-kernel.
 #      BSP 内核缺少 fnOS 私有 trimafs，无法运行管理界面，故必须用官方内核。
 #   B) 友善 BSP 内核布局（备用）：Image + dtb/ + extlinux/extlinux.conf
 if [ -n "${FNOS_BOOT:-}" ] && [ -f "$FNOS_BOOT/Image" ]; then
-    log "生成 boot.img (fnOS 内核布局, FAT32 ${BOOT_SIZE} 扇区)"
+    log "生成 boot.img (fnOS 内核布局, ext4 ${BOOT_SIZE} 扇区)"
     BOOT_SRC="$UPDATE_DIR/boot"
     rm -rf "$BOOT_SRC"
     mkdir -p "$BOOT_SRC"
@@ -75,11 +75,29 @@ if [ -n "${FNOS_BOOT:-}" ] && [ -f "$FNOS_BOOT/Image" ]; then
     # 确保 dtb 是我们板子的
     mkdir -p "$BOOT_SRC/dtb/rockchip"
     cp -f "$IMAGE_DIR/dtb/rockchip/rk3588-aiot3588a.dtb" "$BOOT_SRC/dtb/rockchip/"
+    # 第二条引导路径：extlinux.conf（distro_bootcmd 扫完 boot.scr 后会试 sysboot）
+    mkdir -p "$BOOT_SRC/extlinux"
+    cat > "$BOOT_SRC/extlinux/extlinux.conf" <<'EOF'
+label fnos
+    kernel /Image
+    fdt /dtb/rockchip/rk3588-aiot3588a.dtb
+    initrd /uInitrd
+    append root=UUID=357e9eb7-73ea-4367-b981-6296a97687e0 rootwait rw rootfstype=btrfs rootflags=compress=zstd:1 console=ttyS2,1500000n8 console=tty0 loglevel=7 net.ifnames=0 max_loop=128
+EOF
+    USED_MB=$(( $(du -sm "$BOOT_SRC" | cut -f1) ))
+    log "boot 分区内容 ${USED_MB}MB / 分区 $(( BOOT_SIZE / 2048 ))MB"
+    [ "$USED_MB" -lt $(( BOOT_SIZE / 2048 - 6 )) ] || die "boot 分区空间不足（内容 ${USED_MB}MB）"
     truncate -s $(( BOOT_SIZE * 512 )) "$UPDATE_DIR/boot.img"
-    mkfs.vfat -F 32 -n BOOT "$UPDATE_DIR/boot.img" >/dev/null
-    mcopy -s -i "$UPDATE_DIR/boot.img" "$BOOT_SRC/"* ::/ 2>/dev/null || \
-        ( cd "$BOOT_SRC" && for f in *; do mcopy -s -i "$UPDATE_DIR/boot.img" "$f" "::/$f"; done )
-    log "boot.img 内容："; mdir -i "$UPDATE_DIR/boot.img" ::/ | head -12
+    # u-boot 2017.09 的 ext4 驱动不支持 64bit / metadata_csum 特性，必须关掉
+    mkfs.ext4 -q -F -L BOOT -O ^64bit,^metadata_csum -I 256 "$UPDATE_DIR/boot.img"
+    MNTB="$WORK_DIR/mnt-boot"
+    mkdir -p "$MNTB"
+    mount -o loop "$UPDATE_DIR/boot.img" "$MNTB"
+    cp -a "$BOOT_SRC/." "$MNTB/"
+    sync
+    umount "$MNTB"
+    rmdir "$MNTB"
+    log "boot.img 内容："; ls -lh "$BOOT_SRC" | head -8
 else
     log "生成 boot.img (BSP 内核布局, FAT32 ${BOOT_SIZE} 扇区)"
     BOOT_SRC="$UPDATE_DIR/boot"

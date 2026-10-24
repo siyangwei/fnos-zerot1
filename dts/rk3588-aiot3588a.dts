@@ -386,10 +386,11 @@
 	 * ======================================================================== */
 	gpio_leds: gpio-leds {
 		compatible = "gpio-leds";
-		status = "disabled";
+		status = "okay";
 
 		work_led: work_led {
-			linux,default-trigger = "heartbeat";
+			label = "zerot1:blue:work";
+			linux,default-trigger = "default-on";
 			gpios = <&gpio4 RK_PA5 GPIO_ACTIVE_HIGH>;
 		};
 	};
@@ -995,7 +996,8 @@
 };
 
 &pcie2x1l1 {
-	status = "okay";
+	/* 本板 miniPCIe 座只连通 USB 通道，PCIe 差分对未连出（实测无设备）*/
+	status = "disabled";
 };
 
 &pcie2x1l2 {

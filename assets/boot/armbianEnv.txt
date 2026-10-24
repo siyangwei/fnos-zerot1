@@ -1,0 +1,11 @@
+verbosity=7
+bootlogo=false
+fdtfile=rockchip/rk3588-aiot3588a.dtb
+rootdev=UUID=357e9eb7-73ea-4367-b981-6296a97687e0
+rootfstype=btrfs
+rootflags=compress=zstd:1
+overlay_prefix=rk3588
+overlays=
+extraargs=rw rootwait
+extraboardargs=net.ifnames=0 max_loop=128
+docker_optimizations=on
