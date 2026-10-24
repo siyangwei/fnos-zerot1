@@ -61,6 +61,15 @@ user-session=xfce
 greeter-session=lightdm-gtk-greeter
 EOF
 
+# 修复 Debian lightdm PAM 默认禁止 root 自动登录（否则 autologin root 会失败）
+if [ -f "$ROOTFS/etc/pam.d/lightdm-autologin" ]; then
+    sed -i 's/^auth.*pam_succeed_if.*user != root.*$/auth required pam_succeed_if.so quiet_success/' \
+        "$ROOTFS/etc/pam.d/lightdm-autologin" || true
+fi
+# fnOS 精简系统没有 /run/utmp，lightdm 会报 "Failed to write utmpx"
+touch "$ROOTFS/run/utmp" 2>/dev/null || true
+mkdir -p "$ROOTFS/var/run" 2>/dev/null || true
+
 # root 的 xsession
 cat > "$ROOTFS/root/.xsession" <<'EOF'
 #!/bin/sh
