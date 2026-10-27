@@ -90,7 +90,11 @@
 		status = "okay";
 
 		panel-timing {
-			clock-frequency = <139000000>;
+			/* 132MHz：实测 dclk_vop1 只能拿到 132MHz（GPLL 1188/9），
+			 * 而 139MHz 会让 VOP/TRX 的 MSA 时钟与实际像素时钟不一致，
+			 * 先改成 132MHz 验证“MSA 时钟匹配”假设。
+			 */
+			clock-frequency = <132000000>;
 			hactive = <1920>;
 			vactive = <1080>;
 			hfront-porch = <40>;
@@ -365,12 +369,20 @@
 
 /* ==================== 显示链路 ==================== */
 
+/*
+ * 显示链路（2026-10-26 实测修正）
+ * fnOS 6.18 内核的 rockchipdrm 缺少 "Set VOP for the DRM DMA device" 补丁
+ * （Collabora 分支 47c21077），fbdev/dumb buffer 会分配在错误的 dma 设备上，
+ * VOP 平面寄存器里拿到的地址是 0 → 屏幕全黑（只有背光）。
+ * 绕法：关掉 VOP 的 IOMMU，让 DMA 直接走物理地址（fb 缓冲在 32bit CMA 内）。
+ */
 &vop {
+	/delete-property/ iommus;
 	status = "okay";
 };
 
 &vop_mmu {
-	status = "okay";
+	status = "disabled";
 };
 
 /* HDMI1 -> VP0 */
@@ -403,6 +415,12 @@
 };
 
 &edp0 {
+	/*
+	 * 面板没有独立 HPD 信号，BSP 6.1 的 dtb 同样用 force-hpd；
+	 * mainline analogix_dp 只在 HPD 检测失败时才用它强置 HPD_STATUS，
+	 * 但按 RK3588 TRM：HPD_STATUS=0 时 AUX CH 不工作 ⇒ 保留该属性。
+	 */
+	force-hpd;
 	status = "okay";
 };
 
@@ -1094,6 +1112,15 @@
 
 /* WiFi SDIO */
 &sdio {
+	/*
+	 * WiFi(AP6256) 的 SDIO 走 m0 引脚组（GPIO2_A6/A7/B0/B1 + B2/B3），
+	 * 这是 BSP 6.1 dtb 的用法；mainline 默认的 sdiom1 是 GPIO3_A0~A5，
+	 * 与本板 gmac1 RGMII 复用冲突（启动日志：
+	 * "pin gpio3-5 already requested by fe1c0000.ethernet; cannot claim for fe2d0000.mmc"），
+	 * 会导致 sdio 起不来、没有 wlan0。
+	 */
+	pinctrl-names = "default";
+	pinctrl-0 = <&sdiom0_pins>;
 	bus-width = <4>;
 	cap-sd-highspeed;
 	cap-sdio-irq;

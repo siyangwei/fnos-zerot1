@@ -1,0 +1,385 @@
+--- /tmp/linux-6.18.18/drivers/gpu/drm/bridge/analogix/analogix_dp_core.c	2026-03-14 00:23:30.000000000 +0800
++++ /tmp/adp/analogix_dp_core.c	2026-10-27 21:39:07.341295579 +0800
+@@ -31,6 +31,92 @@
+ #include <drm/drm_probe_helper.h>
+ 
+ #include "analogix_dp_core.h"
++#include <linux/io.h>
++
++/* ZT1: runtime-tunable params (re-applied on every enable, so a
++ * fb0 blank/unblank cycle picks up new values without reflashing) */
++static int zt1_bpc;
++module_param(zt1_bpc, int, 0644);
++MODULE_PARM_DESC(zt1_bpc, "ZT1: force panel bpc (0=auto from DT, 6/8/10)");
++static int zt1_rate;
++module_param(zt1_rate, int, 0644);
++MODULE_PARM_DESC(zt1_rate, "ZT1: force link rate in 100MHz units (0=auto, 6=1.62G, 10=2.7G, 20=5.4G)");
++static int zt1_lanes;
++module_param(zt1_lanes, int, 0644);
++MODULE_PARM_DESC(zt1_lanes, "ZT1: force lane count (0=auto)");
++static int zt1_timing = 1;
++module_param(zt1_timing, int, 0644);
++MODULE_PARM_DESC(zt1_timing, "ZT1: 1=TX generates timing from registers (eDP), 0=capture VOP timing");
++static int zt1_vopgrf = 1;
++module_param(zt1_vopgrf, int, 0644);
++MODULE_PARM_DESC(zt1_vopgrf, "ZT1: enable VOP grf_edp0_en (vop_grf CON2 bit0) before video");
++static int zt1_vogrfg = 1;
++module_param(zt1_vogrfg, int, 0644);
++MODULE_PARM_DESC(zt1_vogrfg, "ZT1: set VO1 output mode to eDP (vo1_grf CON0 bit0)");
++static int zt1_rekick = 1;
++module_param(zt1_rekick, int, 0644);
++MODULE_PARM_DESC(zt1_rekick, "ZT1: schedule one connector re-probe after boot (initial modeset quirk)");
++
++/* ZT1: on this platform the very first modeset happens before VOP is
++ * streaming, so the panel stays dark until the output is re-programmed.
++ * One connector re-probe after boot fixes it without any userspace help. */
++static int analogix_dp_config_video(struct analogix_dp_device *dp);
++
++static void zt1_rekick_work(struct work_struct *work)
++{
++	struct analogix_dp_device *dp =
++		container_of(work, struct analogix_dp_device, zt1_work.work);
++
++	struct drm_atomic_state *st;
++
++	dev_info(dp->dev, "ZT1: full modeset retry (boot quirk)\n");
++	st = drm_atomic_helper_suspend(dp->drm_dev);
++	if (IS_ERR(st)) {
++		dev_warn(dp->dev, "ZT1: suspend failed %ld\n", PTR_ERR(st));
++		return;
++	}
++	msleep(150);
++	dev_info(dp->dev, "ZT1: resume ret=%d\n",
++		 drm_atomic_helper_resume(dp->drm_dev, st));
++}
++
++/* ZT1: eDP output gate lives in vop_grf; mainline vop2 has no eDP support */
++static void zt1_vop_grf_edp0_enable(struct analogix_dp_device *dp)
++{
++	void __iomem *grf;
++	u32 v;
++
++	if (!zt1_vopgrf)
++		return;
++	grf = ioremap(0xfd5a4000, 0x100);
++	if (!grf) {
++		dev_warn(dp->dev, "ZT1: vop_grf ioremap failed\n");
++		return;
++	}
++	v = readl(grf + 0x08);
++	dev_info(dp->dev, "ZT1: VOP_GRF_CON2=0x%08x edp0_en=%u\n", v, v & 1);
++	if (!(v & 1))
++		writel(v | 0x00010001, grf + 0x08); /* bit0 + write mask */
++	dev_info(dp->dev, "ZT1: VOP_GRF_CON2 after=0x%08x\n", readl(grf + 0x08));
++	iounmap(grf);
++
++	/* ZT1: VO1 output mode select (edp_mode) lives in vo1_grf CON0 bit0.
++	 * Rockchip BSP sets it in rockchip_dp_poweron_start(); the mainline
++	 * glue in this kernel never does, and then VO1 feeds HDMI0 instead
++	 * of eDP0 and the panel stays black. */
++	if (zt1_vogrfg) {
++		grf = ioremap(0xfd5a8000, 0x100);
++		if (grf) {
++			dev_info(dp->dev, "ZT1: VO1_GRF_CON0 before=0x%08x\n",
++				 readl(grf));
++			writel(0x00010001, grf);	/* bit0 + write mask */
++			dev_info(dp->dev, "ZT1: VO1_GRF_CON0 after=0x%08x\n",
++				 readl(grf));
++			iounmap(grf);
++		}
++	}
++}
++
+ #include "analogix_dp_reg.h"
+ 
+ #define to_dp(nm)	container_of(nm, struct analogix_dp_device, nm)
+@@ -556,8 +642,17 @@
+ 	int retval = 0;
+ 	bool training_finished = false;
+ 
+-	/* Initialize by reading RX's DPCD */
+-	analogix_dp_get_max_rx_bandwidth(dp, &dp->link_train.link_rate);
++	/* Initialize by reading RX's DPCD (retry: first AUX read can return 0) */
++	{
++		int zt1_try;
++
++		for (zt1_try = 0; zt1_try < 5; zt1_try++) {
++			analogix_dp_get_max_rx_bandwidth(dp, &dp->link_train.link_rate);
++			if (dp->link_train.link_rate)
++				break;
++			msleep(20);
++		}
++	}
+ 	analogix_dp_get_max_rx_lane_count(dp, &dp->link_train.lane_count);
+ 
+ 	if ((dp->link_train.link_rate != DP_LINK_BW_1_62) &&
+@@ -574,6 +669,12 @@
+ 		dp->link_train.lane_count = (u8)LANE_COUNT1;
+ 	}
+ 
++	/* ZT1: optional overrides (runtime tunable) */
++	if (zt1_rate)
++		dp->link_train.link_rate = zt1_rate;
++	if (zt1_lanes && zt1_lanes < dp->link_train.lane_count)
++		dp->link_train.lane_count = zt1_lanes;
++
+ 	/* Setup TX lane count & rate */
+ 	if (dp->link_train.lane_count > max_lanes)
+ 		dp->link_train.lane_count = max_lanes;
+@@ -703,8 +804,16 @@
+ 
+ 	analogix_dp_config_video_slave_mode(dp);
+ 
++	/* ZT1: allow overriding panel bpc at runtime */
++	if (zt1_bpc)
++		dp->video_info.panel_bpc = zt1_bpc;
++
+ 	analogix_dp_set_video_color_format(dp);
+ 
++	/* ZT1: program register timing (BSP behaviour) */
++	if (zt1_timing)
++		analogix_dp_set_video_format(dp);
++
+ 	for (;;) {
+ 		timeout_loop++;
+ 		if (analogix_dp_is_slave_video_stream_clock_on(dp) == 0)
+@@ -720,7 +829,14 @@
+ 	analogix_dp_set_video_cr_mn(dp, CALCULATED_M, 0, 0);
+ 
+ 	/* For video bist, Video timing must be generated by register */
+-	analogix_dp_set_video_timing_mode(dp, VIDEO_TIMING_FROM_CAPTURE);
++	analogix_dp_set_video_timing_mode(dp,
++		zt1_timing ? VIDEO_TIMING_FROM_REGISTER : VIDEO_TIMING_FROM_CAPTURE);
++	dev_info(dp->dev, "ZT1: timing mode = %s\n",
++		 zt1_timing ? "REGISTER" : "CAPTURE");
++	dev_info(dp->dev, "ZT1: params bpc=%d rate=0x%02x lanes=%u vopgrf=%d\n",
++		 zt1_bpc, dp->link_train.link_rate,
++		 dp->link_train.lane_count, zt1_vopgrf);
++	zt1_vop_grf_edp0_enable(dp);
+ 
+ 	/* Disable video mute */
+ 	analogix_dp_enable_video_mute(dp, 0);
+@@ -751,6 +867,13 @@
+ 		usleep_range(1000, 1001);
+ 	}
+ 
++	/* ZT1: one-shot re-probe so the panel lights up at boot */
++	if (zt1_rekick && !dp->zt1_rekick_done) {
++		dp->zt1_rekick_done = true;
++		INIT_DELAYED_WORK(&dp->zt1_work, zt1_rekick_work);
++		schedule_delayed_work(&dp->zt1_work, msecs_to_jiffies(400));
++	}
++
+ 	return 0;
+ }
+ 
+@@ -860,6 +983,31 @@
+ 		return ret;
+ 	}
+ 
++	/* ZT1: one-shot register dump for bring-up */
++	{
++		static const struct { const char *n; u32 o; } zt1[] = {
++			{"VIDEO_CTL_1", 0x20}, {"VIDEO_CTL_2", 0x24},
++			{"VIDEO_CTL_3", 0x28}, {"VIDEO_CTL_8", 0x3C},
++			{"VIDEO_CTL_10", 0x44}, {"SYS_CTL_1", 0x600},
++			{"SYS_CTL_2", 0x604}, {"SYS_CTL_3", 0x608},
++			{"SYS_CTL_4", 0x60C}, {"INT_STA", 0x3DC},
++			{"LINK_BW_SET", 0x680}, {"LANE_CNT_SET", 0x684},
++			{"TRAIN_PTN_SET", 0x688}, {"PHY_PD", 0x720},
++		};
++		u8 dpcd[16];
++		int i, zr;
++
++		for (i = 0; i < ARRAY_SIZE(zt1); i++)
++			dev_info(dp->dev, "ZT1: %s=0x%08x\n", zt1[i].n,
++				 readl(dp->reg_base + zt1[i].o));
++		zr = drm_dp_dpcd_read(&dp->aux, 0x000, dpcd, sizeof(dpcd));
++		if (zr == sizeof(dpcd))
++			dev_info(dp->dev, "ZT1: DPCD 000=%*phN\n", 16, dpcd);
++		zr = drm_dp_dpcd_read(&dp->aux, 0x202, dpcd, 6);
++		if (zr == 6)
++			dev_info(dp->dev, "ZT1: DPCD 202=%*phN\n", 6, dpcd);
++	}
++
+ 	/* Safe to enable the panel now */
+ 	drm_panel_enable(dp->plat_data->panel);
+ 
+@@ -1310,6 +1458,7 @@
+ 	video->interlaced = !!(mode->flags & DRM_MODE_FLAG_INTERLACE);
+ 	video->v_sync_polarity = !!(mode->flags & DRM_MODE_FLAG_NVSYNC);
+ 	video->h_sync_polarity = !!(mode->flags & DRM_MODE_FLAG_NHSYNC);
++	video->mode = *mode;
+ 
+ 	/* Input video dynamic_range & colorimetry */
+ 	vic = drm_match_cea_mode(mode);
+@@ -1343,6 +1492,19 @@
+ 		video->color_depth = COLOR_8;
+ 		break;
+ 	}
++	/* ZT1: eDP panels have no EDID, take bpc from panel DT */
++	switch (dp->video_info.panel_bpc) {
++	case 6:
++		video->color_depth = COLOR_6;
++		break;
++	case 8:
++		video->color_depth = COLOR_8;
++		break;
++	case 10:
++		video->color_depth = COLOR_10;
++		break;
++	}
++
+ 	if (display_info->color_formats & DRM_COLOR_FORMAT_YCBCR444)
+ 		video->color_space = COLOR_YCBCR444;
+ 	else if (display_info->color_formats & DRM_COLOR_FORMAT_YCBCR422)
+@@ -1416,6 +1578,29 @@
+ 		break;
+ 	}
+ 
++	/* ZT1: eDP has no EDID, read bpc from the panel node */
++	{
++		struct fwnode_handle *ep, *panel;
++		struct device_node *np;
++		u32 bpc;
++
++		ep = fwnode_graph_get_endpoint_by_id(dev_fwnode(dp->dev), 1, 0,
++						     FWNODE_GRAPH_ENDPOINT_NEXT);
++		if (ep) {
++			panel = fwnode_graph_get_remote_port_parent(ep);
++			if (panel) {
++				np = to_of_node(panel);
++				if (np && !of_property_read_u32(np, "bpc", &bpc) &&
++				    (bpc == 6 || bpc == 8 || bpc == 10)) {
++					video_info->panel_bpc = bpc;
++					dev_info(dp->dev, "ZT1: panel bpc=%u from DT\n", bpc);
++				}
++				fwnode_handle_put(panel);
++			}
++			fwnode_handle_put(ep);
++		}
++	}
++
+ 	return 0;
+ }
+ 
+--- /tmp/linux-6.18.18/drivers/gpu/drm/bridge/analogix/analogix_dp_core.h	2026-03-14 00:23:30.000000000 +0800
++++ /tmp/adp/analogix_dp_core.h	2026-10-27 21:07:09.020315706 +0800
+@@ -135,8 +135,12 @@
+ 	enum color_coefficient ycbcr_coeff;
+ 	enum color_depth color_depth;
+ 
++	struct drm_display_mode mode;
++
+ 	int max_link_rate;
+ 	enum link_lane_count_type max_lane_count;
++
++	int panel_bpc;	/* ZT1: bpc from panel DT (eDP has no EDID) */
+ };
+ 
+ struct link_train {
+@@ -171,6 +175,10 @@
+ 	bool			psr_supported;
+ 
+ 	struct analogix_dp_plat_data *plat_data;
++
++	/* ZT1: boot-time re-probe workaround */
++	struct delayed_work	zt1_work;
++	bool			zt1_rekick_done;
+ };
+ 
+ /* analogix_dp_reg.c */
+@@ -212,6 +220,7 @@
+ void analogix_dp_init_video(struct analogix_dp_device *dp);
+ 
+ void analogix_dp_set_video_color_format(struct analogix_dp_device *dp);
++void analogix_dp_set_video_format(struct analogix_dp_device *dp);
+ int analogix_dp_is_slave_video_stream_clock_on(struct analogix_dp_device *dp);
+ void analogix_dp_set_video_cr_mn(struct analogix_dp_device *dp,
+ 				 enum clock_recovery_m_value_type type,
+--- /tmp/linux-6.18.18/drivers/gpu/drm/bridge/analogix/analogix_dp_reg.c	2026-03-14 00:23:30.000000000 +0800
++++ /tmp/adp/analogix_dp_reg.c	2026-10-27 19:29:54.683005816 +0800
+@@ -1105,3 +1105,39 @@
+ 
+ 	return -EREMOTEIO;
+ }
++
++void analogix_dp_set_video_format(struct analogix_dp_device *dp)
++{
++	struct video_info *video = &dp->video_info;
++	const struct drm_display_mode *mode = &video->mode;
++	unsigned int hsw, hfp, hbp, vsw, vfp, vbp;
++
++	hsw = mode->crtc_hsync_end - mode->crtc_hsync_start;
++	hfp = mode->crtc_hsync_start - mode->crtc_hdisplay;
++	hbp = mode->crtc_htotal - mode->crtc_hsync_end;
++	vsw = mode->crtc_vsync_end - mode->crtc_vsync_start;
++	vfp = mode->crtc_vsync_start - mode->crtc_vdisplay;
++	vbp = mode->crtc_vtotal - mode->crtc_vsync_end;
++
++	dev_info(dp->dev, "ZT1: reg timing %dx%d htotal=%d vtotal=%d hfp=%u hsw=%u hbp=%u vfp=%u vsw=%u vbp=%u\n",
++		 mode->crtc_hdisplay, mode->crtc_vdisplay, mode->crtc_htotal, mode->crtc_vtotal,
++		 hfp, hsw, hbp, vfp, vsw, vbp);
++
++	writel(TOTAL_LINE_CFG_L(mode->crtc_vtotal), dp->reg_base + ANALOGIX_DP_TOTAL_LINE_CFG_L);
++	writel(TOTAL_LINE_CFG_H(mode->crtc_vtotal >> 8), dp->reg_base + ANALOGIX_DP_TOTAL_LINE_CFG_H);
++	writel(ACTIVE_LINE_CFG_L(mode->crtc_vdisplay), dp->reg_base + ANALOGIX_DP_ACTIVE_LINE_CFG_L);
++	writel(ACTIVE_LINE_CFG_H(mode->crtc_vdisplay >> 8), dp->reg_base + ANALOGIX_DP_ACTIVE_LINE_CFG_H);
++	writel(V_F_PORCH_CFG(vfp), dp->reg_base + ANALOGIX_DP_V_F_PORCH_CFG);
++	writel(V_SYNC_WIDTH_CFG(vsw), dp->reg_base + ANALOGIX_DP_V_SYNC_WIDTH_CFG);
++	writel(V_B_PORCH_CFG(vbp), dp->reg_base + ANALOGIX_DP_V_B_PORCH_CFG);
++	writel(TOTAL_PIXEL_CFG_L(mode->crtc_htotal), dp->reg_base + ANALOGIX_DP_TOTAL_PIXEL_CFG_L);
++	writel(TOTAL_PIXEL_CFG_H(mode->crtc_htotal >> 8), dp->reg_base + ANALOGIX_DP_TOTAL_PIXEL_CFG_H);
++	writel(ACTIVE_PIXEL_CFG_L(mode->crtc_hdisplay), dp->reg_base + ANALOGIX_DP_ACTIVE_PIXEL_CFG_L);
++	writel(ACTIVE_PIXEL_CFG_H(mode->crtc_hdisplay >> 8), dp->reg_base + ANALOGIX_DP_ACTIVE_PIXEL_CFG_H);
++	writel(H_F_PORCH_CFG_L(hfp), dp->reg_base + ANALOGIX_DP_H_F_PORCH_CFG_L);
++	writel(H_F_PORCH_CFG_H(hfp >> 8), dp->reg_base + ANALOGIX_DP_H_F_PORCH_CFG_H);
++	writel(H_SYNC_CFG_L(hsw), dp->reg_base + ANALOGIX_DP_H_SYNC_CFG_L);
++	writel(H_SYNC_CFG_H(hsw >> 8), dp->reg_base + ANALOGIX_DP_H_SYNC_CFG_H);
++	writel(H_B_PORCH_CFG_L(hbp), dp->reg_base + ANALOGIX_DP_H_B_PORCH_CFG_L);
++	writel(H_B_PORCH_CFG_H(hbp >> 8), dp->reg_base + ANALOGIX_DP_H_B_PORCH_CFG_H);
++}
+--- /tmp/linux-6.18.18/drivers/gpu/drm/bridge/analogix/analogix_dp_reg.h	2026-03-14 00:23:30.000000000 +0800
++++ /tmp/adp/analogix_dp_reg.h	2026-10-27 19:26:50.781574234 +0800
+@@ -423,4 +423,41 @@
+ #define PSR_VID_CRC_FLUSH			(0x1 << 2)
+ #define PSR_VID_CRC_ENABLE			(0x1 << 0)
+ 
++
++/* ZT1: video format (register timing) registers, from RK BSP */
++#define ANALOGIX_DP_TOTAL_LINE_CFG_L		0x48
++#define ANALOGIX_DP_TOTAL_LINE_CFG_H		0x4C
++#define ANALOGIX_DP_ACTIVE_LINE_CFG_L		0x50
++#define ANALOGIX_DP_ACTIVE_LINE_CFG_H		0x54
++#define ANALOGIX_DP_V_F_PORCH_CFG		0x58
++#define ANALOGIX_DP_V_SYNC_WIDTH_CFG		0x5C
++#define ANALOGIX_DP_V_B_PORCH_CFG		0x60
++#define ANALOGIX_DP_TOTAL_PIXEL_CFG_L		0x64
++#define ANALOGIX_DP_TOTAL_PIXEL_CFG_H		0x68
++#define ANALOGIX_DP_ACTIVE_PIXEL_CFG_L		0x6C
++#define ANALOGIX_DP_ACTIVE_PIXEL_CFG_H		0x70
++#define ANALOGIX_DP_H_F_PORCH_CFG_L		0x74
++#define ANALOGIX_DP_H_F_PORCH_CFG_H		0x78
++#define ANALOGIX_DP_H_SYNC_CFG_L		0x7C
++#define ANALOGIX_DP_H_SYNC_CFG_H		0x80
++#define ANALOGIX_DP_H_B_PORCH_CFG_L		0x84
++#define ANALOGIX_DP_H_B_PORCH_CFG_H		0x88
++
++#define TOTAL_LINE_CFG_L(x)			(((x) & 0xff) << 0)
++#define TOTAL_LINE_CFG_H(x)			(((x) & 0xf) << 0)
++#define ACTIVE_LINE_CFG_L(x)			(((x) & 0xff) << 0)
++#define ACTIVE_LINE_CFG_H(x)			(((x) & 0xf) << 0)
++#define V_F_PORCH_CFG(x)			(((x) & 0xff) << 0)
++#define V_SYNC_WIDTH_CFG(x)			(((x) & 0xff) << 0)
++#define V_B_PORCH_CFG(x)			(((x) & 0xff) << 0)
++#define TOTAL_PIXEL_CFG_L(x)			(((x) & 0xff) << 0)
++#define TOTAL_PIXEL_CFG_H(x)			(((x) & 0x3f) << 0)
++#define ACTIVE_PIXEL_CFG_L(x)			(((x) & 0xff) << 0)
++#define ACTIVE_PIXEL_CFG_H(x)			(((x) & 0x3f) << 0)
++#define H_F_PORCH_CFG_L(x)			(((x) & 0xff) << 0)
++#define H_F_PORCH_CFG_H(x)			(((x) & 0xf) << 0)
++#define H_SYNC_CFG_L(x)				(((x) & 0xff) << 0)
++#define H_SYNC_CFG_H(x)				(((x) & 0xf) << 0)
++#define H_B_PORCH_CFG_L(x)			(((x) & 0xff) << 0)
++#define H_B_PORCH_CFG_H(x)			(((x) & 0xf) << 0)
+ #endif /* _ANALOGIX_DP_REG_H */

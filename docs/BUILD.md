@@ -285,3 +285,33 @@ upgrade_tool rd
 - zhangyada/fnos-elf3588（ELF3588 适配，本项目的思路模板）：https://github.com/zhangyada/fnos-elf3588
 - 友善 NanoPC-T6 wiki：https://wiki.friendlyelec.com/wiki/index.php/NanoPC-T6/zh
 - Rockchip SD-Fuse RK3588：https://github.com/friendlyarm/sd-fuse_rk3588
+
+---
+
+## 附：eDP 专用的 analogix_dp.ko
+
+fnOS 官方内核（6.18.18-trim）在本板的 eDP 上需要三处修改，已整理为：
+
+- 补丁：`patches/kernel/6.18.18/0001-analogix-dp-rockchip-edp-bringup.patch`
+- 源码：`kernel-modules/analogix-dp-6.18.18/`（core.c/core.h/reg.c/reg.h/Makefile）
+- 构建：`scripts/build-analogix-dp.sh`（需先准备内核树，见上文）
+
+三处修改与原因：
+
+1. **eDP 必须由 TX 用寄存器生成时序**（`VIDEO_TIMING_FROM_REGISTER`）
+   eDP 面板没有 EDID，mainline 默认走 `VIDEO_TIMING_FROM_CAPTURE`，VOP 未就绪时拿不到有效时序。
+2. **首次 DPCD 读回 `max_link_rate=0` 时重试并回退**（不用写死速率）
+   部分面板/屏线首次 AUX 读不稳定；重读成功则按其值训练，仍失败才退到 1.62G。
+3. **开机首次 modeset 后 400ms 补一次完整 modeset**
+   现象：开机第一次使能后屏幕只有背光，手动 `blank 1→0` 或第二次 modeset 就正常。
+   原因是厂商 VOP2（闭源补丁）首次编程 eDP 输出未真正生效；补一次 `drm_atomic_helper_suspend/resume`
+   后立即出图，不需要任何启动脚本或人工操作。
+
+构建后把 `analogix_dp.stripped.ko` 放到：
+
+```
+work/rootfs/lib/modules/6.18.18-trim/kernel/drivers/gpu/drm/bridge/analogix/analogix_dp.ko
+work/boot-fix-2214/uInitrd   # initramfs 里同一路径（启动早期加载的是它，必须一起换）
+```
+
+注意：fnOS 启动早期从 **uInitrd 里的模块**加载 analogix_dp，rootfs 里的同名模块不会生效，两处都要替换。
