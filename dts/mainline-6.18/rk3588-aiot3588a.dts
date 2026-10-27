@@ -94,15 +94,20 @@
 			 * 而 139MHz 会让 VOP/TRX 的 MSA 时钟与实际像素时钟不一致，
 			 * 先改成 132MHz 验证“MSA 时钟匹配”假设。
 			 */
+			/* 132MHz 是 dclk_vop1 实际能拿到的时钟（GPLL 1188/9），
+			 * 要让刷新率正好 60Hz，总像素必须 = 132M/60 = 2,200,000：
+			 * htotal 2000 x vtotal 1100 = 2,200,000 → 60.00Hz
+			 *（原先 139MHz/2080x1111 只能跑 57.1Hz）
+			 */
 			clock-frequency = <132000000>;
 			hactive = <1920>;
 			vactive = <1080>;
 			hfront-porch = <40>;
 			hsync-len = <20>;
-			hback-porch = <100>;
+			hback-porch = <20>;
 			vfront-porch = <12>;
 			vsync-len = <4>;
-			vback-porch = <15>;
+			vback-porch = <4>;
 			hsync-active = <0>;
 			vsync-active = <0>;
 			de-active = <0>;

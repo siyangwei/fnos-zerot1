@@ -55,19 +55,43 @@ fi
 
 # ---- lightdm 自动登录 root，进入 XFCE ----
 mkdir -p "$ROOTFS/etc/lightdm/lightdm.conf.d"
-cat > "$ROOTFS/etc/lightdm/lightdm.conf.d/50-autologin.conf" <<'EOF'
+# ---------------------------------------------------------------
+# 登录方式：使用 lightdm-gtk-greeter 正常登录（**不启用 autologin**）
+# ---------------------------------------------------------------
+mkdir -p "$ROOTFS/etc/lightdm/lightdm.conf.d"
+rm -f "$ROOTFS/etc/lightdm/lightdm.conf.d/50-autologin.conf"
+cat > "$ROOTFS/etc/lightdm/lightdm.conf.d/60-greeter.conf" <<'EOF'
 [Seat:*]
-autologin-user=root
-autologin-user-timeout=0
-user-session=xfce
 greeter-session=lightdm-gtk-greeter
+user-session=xfce
+autologin-user=
+autologin-user-timeout=0
 EOF
 
-# 修复 Debian lightdm PAM 默认禁止 root 自动登录（否则 autologin root 会失败）
-if [ -f "$ROOTFS/etc/pam.d/lightdm-autologin" ]; then
-    sed -i 's/^auth.*pam_succeed_if.*user != root.*$/auth required pam_succeed_if.so quiet_success/' \
-        "$ROOTFS/etc/pam.d/lightdm-autologin" || true
+# ---------------------------------------------------------------
+# 预建普通用户 zero（uid/gid 1000），供本地控制台/图形界面登录
+#   fnOS 镜像本身没有内置普通用户（/home/anna 是 ophub 打包残留），
+#   官方做法是在 Web 初始化向导里创建管理员账号；本地登录则需自建。
+#   密码改成你要用的：默认 weisiyang（登录后请 passwd 修改）
+# ---------------------------------------------------------------
+if ! grep -q '^zero:' "$ROOTFS/etc/passwd"; then
+    echo 'zero:x:1000:1000::/home/zero:/bin/bash' >> "$ROOTFS/etc/passwd"
+    HASH=$(openssl passwd -6 -salt zt1zero weisiyang)
+    echo "zero:${HASH}:20400:0:99999:7:::" >> "$ROOTFS/etc/shadow"
+    grep -q '^zero:' "$ROOTFS/etc/group" || echo 'zero:x:1000:' >> "$ROOTFS/etc/group"
+    for g in sudo Administrators; do
+        sed -i "/^${g}:/ s/$/,zero/; /^${g}:/ s/::/:/" "$ROOTFS/etc/group" 2>/dev/null || true
+    done
+    mkdir -p "$ROOTFS/home/zero"
+    [ -d "$ROOTFS/etc/skel" ] && cp -a "$ROOTFS/etc/skel/." "$ROOTFS/home/zero/" 2>/dev/null || true
+    chown -R 1000:1000 "$ROOTFS/home/zero"
 fi
+# 清理 ophub 打包残留的孤儿家目录（uid 1000 现在归 zero）
+rm -rf "$ROOTFS/home/anna"
+
+# lightdm 自身状态目录属主必须是 lightdm，否则 greeter 无法写 .Xauthority
+chown -R 110:110 "$ROOTFS/var/lib/lightdm" 2>/dev/null || true
+
 # fnOS 精简系统没有 /run/utmp，lightdm 会报 "Failed to write utmpx"
 touch "$ROOTFS/run/utmp" 2>/dev/null || true
 mkdir -p "$ROOTFS/var/run" 2>/dev/null || true
@@ -87,4 +111,18 @@ chmod +x "$ROOTFS/root/.xinitrc"
 # 让 lightdm 自启
 chroot_run "$ROOTFS" /bin/bash -c 'systemctl enable lightdm' || true
 
-echo "[40-xfce] 完成: XFCE + lightdm(autologin root)"
+
+# --- root 自动登录的两个必须修复（2026-10-28 实测） ---
+# 1) lightdm 以 lightdm 用户写 /var/lib/lightdm/.Xauthority，镜像里该目录属主是 root
+#    → greeter 报 "Failed to open X authority: Permission denied" → lightdm 反复失败
+mkdir -p "$ROOTFS/var/lib/lightdm"
+chown -R lightdm:lightdm "$ROOTFS/var/lib/lightdm" 2>/dev/null || true
+chmod 755 "$ROOTFS/var/lib/lightdm"
+
+# 2) Debian 默认禁止 root 自动登录：注释掉 pam_succeed_if 那一行
+if [ -f "$ROOTFS/etc/pam.d/lightdm-autologin" ]; then
+    sed -i 's|^\(auth[[:space:]]*required[[:space:]]*pam_succeed_if.so user != root.*\)|#\1|' \
+        "$ROOTFS/etc/pam.d/lightdm-autologin"
+fi
+
+echo "[40-xfce] 完成: XFCE + lightdm-gtk-greeter（无自动登录，用户 zero/weisiyang）"
