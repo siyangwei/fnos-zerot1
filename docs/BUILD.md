@@ -35,12 +35,28 @@ fnos-zerot1/
 │   ├── kernel/
 │   │   ├── 0001-add-smdt-mcu-watchdog.patch                # Kconfig/Makefile/defconfig 三处
 │   │   └── files/smdt_mcu_wdt.c      # 板载 STM8S00K3 MCU 看门狗驱动（i2c-6 0x62）
-│   └── rootfs/
-│       ├── 10-fstab.sh               # 删掉 /boot ext4 挂载行（boot 是 FAT32）
-│       ├── 20-firmware.sh            # 装 WiFi(AP6256)/蓝牙(BCM4345C0) 固件
-│       ├── 30-adb.sh                 # 装 Linux adb/adbd（调试用，qemu chroot）
-│       ├── 40-xfce.sh                # 装 XFCE 桌面 + lightdm 自动登录（qemu chroot）
-│       └── 50-watchdog.sh            # systemd RuntimeWatchdogSec + watchdog 工具
+│   └── rootfs/                       # 按文件名顺序执行（10→96），可 --only NN,NN
+│       ├── 10-fstab.sh               # 重写 /etc/fstab（对齐本项目分区：rootfs=btrfs、boot=FAT32）
+│       ├── 15-network.sh             # NetworkManager / 主机名等网络默认值
+│       ├── 20-firmware.sh            # WiFi(AP6256/brcmfmac43456) + 蓝牙(BCM4345C5) 固件与配置
+│       ├── 22-watchdog-module.sh     # 板载 STM8 MCU 看门狗 ko（i2c-6 0x62）
+│       ├── 25-audio.sh               # ES8388 codec 用户态配置
+│       ├── 26-audio-mclk.sh          # GRF 0xfd58c318 I2S0_MCLK "to_io" 门控（无声根因，服务固化）
+│       ├── 27-vendor-modules.sh      # 自编译 out-of-tree 模块：analogix_dp / brcmfmac 三件套
+│       ├── 28-graphics-modules.sh    # 显示/音频/网卡模块开机加载（modules-load.d）
+│       ├── 30-adb.sh                 # Linux adb/adbd（调试用）
+│       ├── 32-serial-autologin.sh    # 调试串口自动登录
+│       ├── 40-xfce.sh                # XFCE + lightdm（eDP 本地桌面，不预置普通用户）
+│       ├── 41-wizard-firstboot.sh    # 恢复"出厂未初始化"：无普通用户/无 timestamp，保证 Web 向导可注册管理员
+│       ├── 42-logclean.sh            # 日志刷屏治理：journald 限容、mask nut-*、libupnp13、eventlogger 延迟、enable ssh
+│       ├── 45-desktop-apps.sh        # 桌面快捷方式（飞牛管理界面 / 终端等）
+│       ├── 50-watchdog.sh            # systemd RuntimeWatchdogSec + watchdog 工具
+│       ├── 60-desktop-apps.sh        # nm-applet / blueman / chromium / alsa-utils
+│       ├── 70-audio-state.sh         # 喇叭功放使能（amixer spk switch）
+│       ├── 80-docker-fix.sh          # docker.service ExecStop bug + 国内镜像源
+│       ├── 90-rootfs-resize.sh       # 首启扩容策略（交给 Web 管理界面）
+│       ├── 95-diag-console.sh        # 开机诊断输出到串口（临时）
+│       └── 96-gfx-bringup.sh         # 强制拉起显示链路并落盘（临时诊断）
 ├── assets/                           # ★ 预编译复用资源（已入库，日常构建不需重新生成）
 │   ├── MiniLoaderAll.bin             # 友善 SPL loader（含 DDR 训练固件，487,872B）
 │   ├── uboot.img                     # 友善 u-boot（4MB FIT，含 distro_bootcmd 补丁）

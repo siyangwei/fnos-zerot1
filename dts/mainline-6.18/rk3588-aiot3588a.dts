@@ -549,8 +549,15 @@
 	};
 };
 
+/*
+ * HDMI1 音频：原厂 dtb 里 hdmi0_sound/hdmi1_sound 都是 disabled，本板同理。
+ * 实测：无显示器（无 EDID/ELD）时 hdmi-audio-codec 的 snd_soc_dai_prepare()
+ * 恒返回 -ENODEV，同时 PulseAudio 反复尝试打开该声卡，dmesg/journal 每秒刷屏
+ * （ASoC error (-19) 与 "HDMI: Unknown ELD version 0" 数千行）。
+ * HDMI1 的视频输出不受影响；如需 HDMI 音频可临时改回 okay。
+ */
 &hdmi1_sound {
-	status = "okay";
+	status = "disabled";
 };
 
 /* HDMI IN */
@@ -1122,6 +1129,7 @@
 	pinctrl-0 = <&gmac1_miim &gmac1_tx_bus2 &gmac1_rx_bus2
 		     &gmac1_rgmii_clk &gmac1_rgmii_bus>;
 	tx_delay = <0x43>;
+	rx_delay = <0x10>;
 	phy-handle = <&rgmii_phy>;
 	status = "okay";
 };
@@ -1158,9 +1166,11 @@
 /* ==================== PWM ==================== */
 
 /* 背光 */
+/* 背光 PWM1 必须用 m0 引脚组（GPIO0_PC0），与原厂 BSP/Android dtb 一致；
+ * m1 是 GPIO1_PD3，会和 uart4m0 抢占同一引脚（pinctrl 冲突日志）。 */
 &pwm1 {
 	pinctrl-names = "default";
-	pinctrl-0 = <&pwm1m1_pins>;
+	pinctrl-0 = <&pwm1m0_pins>;
 	status = "okay";
 };
 

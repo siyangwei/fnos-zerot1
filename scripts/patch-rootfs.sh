@@ -2,15 +2,26 @@
 # patch-rootfs.sh —— 对 rootfs 目录按顺序执行补丁脚本
 #
 # 每个补丁是一个独立 shell 脚本（patches/rootfs/NN-*.sh），只做一件事：
-#   10-fstab.sh          改写 /etc/fstab（去掉不存在的 /boot ext4 条目）
-#   20-firmware.sh       拷贝 WiFi/BT/regulatory 固件
+#   10-fstab.sh          改写 /etc/fstab（对齐本项目分区布局）
+#   15-network.sh        NetworkManager / 主机名默认值
+#   20-firmware.sh       WiFi/BT/regulatory 固件
+#   22-watchdog-module.sh 板载 MCU 看门狗 ko
+#   25-audio.sh          ES8388 codec 用户态配置
+#   26-audio-mclk.sh     GRF I2S0 MCLK to_io 门控（无声根因，服务固化）
+#   27-vendor-modules.sh 自编译 analogix_dp / brcmfmac 模块
+#   28-graphics-modules.sh 显示/音频/网卡模块开机加载
 #   30-adb.sh            chroot 安装 adb 客户端 + adbd
-#   40-xfce.sh           chroot 安装 XFCE + lightdm
+#   32-serial-autologin.sh 调试串口自动登录
+#   40-xfce.sh           chroot 安装 XFCE + lightdm（不预置普通用户）
+#   41-wizard-firstboot.sh 恢复出厂未初始化态，保证 Web 向导可注册管理员
+#   42-logclean.sh       日志刷屏治理（journald 限容/mask nut/libupnp13/eventlogger 延迟/enable ssh）
+#   45-desktop-apps.sh   桌面快捷方式
 #   50-watchdog.sh       systemd RuntimeWatchdogSec + watchdog 工具
 #   60-desktop-apps.sh   nm-applet / blueman / chromium / alsa-utils + autostart
 #   70-audio-state.sh    ES8388 喇叭功放使能（spk switch）
 #   80-docker-fix.sh     docker.service ExecStop bug + 国内镜像源
 #   90-rootfs-resize.sh  fnnas.conf 首次启动扩到 16GiB
+#   95/96-diag/gfx       临时开机诊断（串口输出/强制拉起显示）
 #
 # 用法:
 #   ./scripts/patch-rootfs.sh <rootfs-dir>                 # 全部按序执行
