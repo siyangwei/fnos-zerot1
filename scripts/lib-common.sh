@@ -22,6 +22,33 @@ set -euo pipefail
 _HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="${PROJECT_DIR:-$(cd "$_HERE/.." && pwd)}"
 
+# ── config.env：仓库根目录的可编辑配置（WiFi / SSH / 构建开关等）──────────
+# 外部环境变量优先：命令行或 GitHub Actions 传入的同名变量会覆盖文件里的值。
+CONFIG_ENV="${CONFIG_ENV:-$PROJECT_DIR/config.env}"
+load_config_env() {
+    local f="$1" line k
+    local keys=()
+    [ -f "$f" ] || return 0
+    declare -A _cfg_saved=()
+    while IFS= read -r line || [ -n "$line" ]; do
+        case "$line" in ''|\#*) continue ;; esac
+        case "$line" in *=*) ;; *) continue ;; esac
+        k="${line%%=*}"; k="${k#export }"; k="${k//[[:space:]]/}"
+        [[ "$k" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
+        keys+=("$k")
+        [ -n "${!k+x}" ] && _cfg_saved[$k]="${!k}"
+    done < "$f"
+    set -a
+    # shellcheck disable=SC1090
+    . "$f"
+    set +a
+    for k in "${keys[@]}"; do
+        [ -n "${_cfg_saved[$k]+x}" ] && printf -v "$k" '%s' "${_cfg_saved[$k]}"
+    done
+    unset _cfg_saved
+}
+load_config_env "$CONFIG_ENV"
+
 WORK_DIR="${WORK_DIR:-$PROJECT_DIR/work}"
 OUTPUT_DIR="${OUTPUT_DIR:-$PROJECT_DIR/output}"
 IMAGE_DIR="${IMAGE_DIR:-$WORK_DIR/images}"

@@ -57,7 +57,11 @@ upgrade_tool uf fnos-aiot3588a-update-*.img  # 约 5.8GB，USB2 需要 5~10 分�
 upgrade_tool rd
 ```
 
-默认登录：`root` / `root`。串口调试：`/dev/ttyACM0`，1500000 8N1（USB 双串口模块）。
+默认登录：`root` / `weisiyang`（由仓库根 `config.env` 的 `ROOT_PASSWORD` 决定）。串口调试：`/dev/ttyACM0`，1500000 8N1（USB 双串口模块）。
+
+开机后设备会自动连接 `config.env` 里配置的 WiFi（`zt1-wifi-connect.service`），
+连上即可 `ssh root@<设备IP>`。WiFi 名称/密码、SSH、主机名、构建开关都在
+**[config.env](config.env)** 里改，说明见 **[docs/CONFIG.md](docs/CONFIG.md)**。
 
 ### 自己构建
 
@@ -65,6 +69,14 @@ upgrade_tool rd
 # 依赖：base-devel gcc-aarch64-linux-gnu qemu-user-static btrfs-progs dosfstools mtools bc
 sudo ./scripts/build-all.sh
 # 产物：output/fnos-aiot3588a-update-YYYYMMDD.img
+```
+
+只改 `config.env`（WiFi/密码/开关）想快速重打包（复用缓存的 rootfs 与内核，约 2~3 分钟）：
+
+```bash
+sudo env SKIP_ROOTFS=1 SKIP_KERNEL=1 \
+     FNOS_BOOT=$PWD/work/boot-fix-2214 IMAGE_DIR=$PWD/work/images \
+     ROOTFS=$PWD/work/rootfs-official bash scripts/build-all.sh
 ```
 
 详细步骤（内核命令、分区布局、为什么要 resource 分区、为什么 boot 是 FAT32……）见
@@ -97,7 +109,8 @@ scripts/
 ├── build-rootfs.sh         rootfs 准备（调用 patch-rootfs.sh）
 ├── pack-image.sh           分区镜像 + update.img 打包
 └── build-all.sh            串联全流程（可 SKIP_* 跳过单步）
-docs/                       BUILD.md 构建文档
+docs/                       BUILD.md 构建文档、CONFIG.md 配置说明、AUDIO.md
+config.env                  ⭐ 构建/首启配置：WiFi、root 密码、SSH、主机名、构建开关
 ```
 
 **补丁解耦约定**（便于后续换内核 / 单独改功能）：

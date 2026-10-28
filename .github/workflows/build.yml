@@ -50,6 +50,32 @@ jobs:
           ls -l /usr/bin/qemu-aarch64-static
           df -h /
 
+      - name: 读取 config.env（仓库根配置；同名 Secrets 优先）
+        env:
+          S_WIFI_SSID: ${{ secrets.WIFI_SSID }}
+          S_WIFI_PASSWORD: ${{ secrets.WIFI_PASSWORD }}
+          S_ROOT_PASSWORD: ${{ secrets.ROOT_PASSWORD }}
+        run: |
+          # 仓库根的 config.env 是唯一配置入口：WiFi、root 密码、构建开关都从这里读。
+          # CI 上若配置了同名 Secrets 则优先（不必把密码写进公开仓库）。
+          set -a
+          [ -f config.env ] && . ./config.env
+          set +a
+
+          [ -n "${S_WIFI_SSID:-}" ] && echo "WIFI_SSID=$S_WIFI_SSID" >> "$GITHUB_ENV"
+          [ -n "${S_WIFI_PASSWORD:-}" ] && echo "WIFI_PASSWORD=$S_WIFI_PASSWORD" >> "$GITHUB_ENV"
+          [ -n "${S_ROOT_PASSWORD:-}" ] && echo "ROOT_PASSWORD=$S_ROOT_PASSWORD" >> "$GITHUB_ENV"
+
+          # config.env 里定义的所有变量都导出给后续步骤（sudo -E 会保留）
+          for k in $(grep -oE '^[A-Za-z_][A-Za-z0-9_]*' config.env 2>/dev/null | sort -u); do
+            v="${!k-}"
+            [ -n "$v" ] && echo "$k=$v" >> "$GITHUB_ENV"
+          done
+          echo "---- 生效配置（敏感值不打印）----"
+          for k in WIFI_SSID WIFI_FALLBACK_SSID WIFI_HIDDEN WIFI_COUNTRY ENABLE_WIFI ENABLE_SSH DEVICE_HOSTNAME SKIP_XFCE; do
+            echo "$k=${!k-<未设置>}"
+          done
+
       - name: 构建 update.img
         env:
           SKIP_XFCE: ${{ inputs.skip_xfce && '1' || '0' }}
