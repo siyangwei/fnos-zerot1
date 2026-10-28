@@ -69,24 +69,15 @@ autologin-user-timeout=0
 EOF
 
 # ---------------------------------------------------------------
-# 预建普通用户 zero（uid/gid 1000），供本地控制台/图形界面登录
-#   fnOS 镜像本身没有内置普通用户（/home/anna 是 ophub 打包残留），
-#   官方做法是在 Web 初始化向导里创建管理员账号；本地登录则需自建。
-#   密码改成你要用的：默认 weisiyang（登录后请 passwd 修改）
+# ★ 不再预建普通用户（2026-10-29 修正）
+#   fnOS 首屏向导会依次调用 user.add1000 → sysinfo.initHostName；
+#   且 getHostName 会用"是否存在普通用户"来判断系统是否已初始化。
+#   镜像里一旦预置 uid 1000 的用户（旧版预建的 zero），向导必然失败：
+#     - add1000 报 uid 1000 已占用（前端「参数错误」）
+#     - initHostName 报 "Host name had been inited!!"（前端「系统内部错误」）
+#   管理员账号一律由 Web 向导注册时创建，见 41-wizard-firstboot.sh。
 # ---------------------------------------------------------------
-if ! grep -q '^zero:' "$ROOTFS/etc/passwd"; then
-    echo 'zero:x:1000:1000::/home/zero:/bin/bash' >> "$ROOTFS/etc/passwd"
-    HASH=$(openssl passwd -6 -salt zt1zero weisiyang)
-    echo "zero:${HASH}:20400:0:99999:7:::" >> "$ROOTFS/etc/shadow"
-    grep -q '^zero:' "$ROOTFS/etc/group" || echo 'zero:x:1000:' >> "$ROOTFS/etc/group"
-    for g in sudo Administrators; do
-        sed -i "/^${g}:/ s/$/,zero/; /^${g}:/ s/::/:/" "$ROOTFS/etc/group" 2>/dev/null || true
-    done
-    mkdir -p "$ROOTFS/home/zero"
-    [ -d "$ROOTFS/etc/skel" ] && cp -a "$ROOTFS/etc/skel/." "$ROOTFS/home/zero/" 2>/dev/null || true
-    chown -R 1000:1000 "$ROOTFS/home/zero"
-fi
-# 清理 ophub 打包残留的孤儿家目录（uid 1000 现在归 zero）
+# 清理 ophub 打包残留的孤儿家目录（/home/anna 属 uid 1000，官方底稿遗留）
 rm -rf "$ROOTFS/home/anna"
 
 # lightdm 自身状态目录属主必须是 lightdm，否则 greeter 无法写 .Xauthority
