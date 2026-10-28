@@ -64,3 +64,37 @@ ssh root@<设备 IP>        # 密码 = ROOT_PASSWORD
 - `config.env` 里有 WiFi 和 root 密码，**仓库请保持 private**；公开镜像用
   Actions Secrets 注入即可（去掉 config.env 里的真实值）。
 - 镜像内的 `/etc/zerot1/config.env` 权限 600 root:root，普通用户读不到。
+
+## 首启 WiFi 的射频国家码（5G 必需）
+
+brcmfmac 固件默认用 "world" 法规域，**5G 只剩 2.4G + 5.8G 可用**，路由器的
+5.15–5.35 GHz（信道 36–64）AP 根本扫不到。首启脚本会执行：
+
+```bash
+iw reg set "$WIFI_COUNTRY"     # 默认 CN
+```
+
+设置成功后 `iw dev wlan0 scan` 才能看到 5G AP（实测 5300 MHz 的 AP 出现，
+连接后 390/263 Mbps）。因此镜像里必须带 `iw`（43-config-env 会自动 chroot 安装）。
+若 `iw` 缺失或国家码设置失败，脚本会退回只用 2.4G 备用 SSID，不影响能上网。
+
+> 说明：之前 5G 连接不上、2.4G 连接后又被踢掉，是因为 5G profile 反复 autoconnect
+> 失败；现在连接成功后会把**当前** profile 的 autoconnect-priority 设为 20，并把其它
+> WiFi profile 的 autoconnect 关掉，避免网卡在两个频段之间来回跳。
+
+## HDMI 音频与日志
+
+DT 里 `&hdmi1_sound = okay`（能用 HDMI 音频的代价：无显示器时 hdmi-codec prepare 返回
+-19，PulseAudio 启动瞬间内核会打约 240 行 `ASoC error (-19)`）。
+
+镜像里用 udev 折中（`44-hdmi-audio-logfix.sh`）：
+
+- 无 HDMI 显示器 → 给 HDMI 声卡加 `PULSE_IGNORE=1`，PA 不探测 ⇒ 日志 0 条；
+- 接显示器 → `PULSE_IGNORE=0`，PA 正常接管，HDMI 音频可用；
+- HDMI 插拔时重新触发 sound add，属性与 PA 状态实时刷新。
+
+手动强制让 PA 认 HDMI 卡（插着显示器但没识别时）：
+
+```bash
+sudo udevadm trigger --subsystem-match=sound --action=add
+```

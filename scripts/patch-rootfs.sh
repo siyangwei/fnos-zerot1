@@ -16,6 +16,7 @@
 #   41-wizard-firstboot.sh 恢复出厂未初始化态，保证 Web 向导可注册管理员
 #   42-logclean.sh       日志刷屏治理（journald 限容/mask nut/libupnp13/eventlogger 延迟/enable ssh）
 #   43-config-env.sh     config.env 落盘 + 首启自动连 WiFi + SSH(root 密码登录)
+#   44-hdmi-audio-logfix.sh HDMI 音频日志治理（无显示器时 PA 忽略 HDMI 声卡）
 #   45-desktop-apps.sh   桌面快捷方式
 #   50-watchdog.sh       systemd RuntimeWatchdogSec + watchdog 工具
 #   60-desktop-apps.sh   nm-applet / blueman / chromium / alsa-utils + autostart

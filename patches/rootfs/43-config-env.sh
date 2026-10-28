@@ -72,9 +72,18 @@ if [ -f "$LOG" ] && [ "$(wc -c <"$LOG" 2>/dev/null || echo 0)" -gt 262144 ]; the
     tail -n 2000 "$LOG" >"$LOG.tmp" && mv "$LOG.tmp" "$LOG"
 fi
 
-# 第 0 步：国家码（只影响射频规范，失败不影响连接）
+# 第 0 步：国家码（brcmfmac 默认用固件 world 法规域，5G 只剩 2.4G+5.8G；
+# 必须把国家码写给固件，5150-5350(信道36-64) 才会被扫描/连接。实测 CN 可行：
+#   iw reg set CN 后 scan 出现 5300MHz 的 AP，连接 5G 成功（263/390 Mbps）
 if [ -n "${WIFI_COUNTRY:-}" ] && command -v iw >/dev/null 2>&1; then
-    iw reg set "$WIFI_COUNTRY" 2>/dev/null || true
+    for _ in 1 2 3; do
+        iw reg set "$WIFI_COUNTRY" 2>/dev/null || true
+        sleep 2
+        iw reg get 2>/dev/null | grep -q "$WIFI_COUNTRY" && break
+    done
+    log "国家码：$(iw reg get 2>/dev/null | head -2 | tr '\n' ' ')"
+else
+    log "iw 不可用，跳过国家码设置（5G 可能不可见）"
 fi
 
 # 第 1 步：等 NetworkManager 与 wlan0 就绪（最多 60s）
@@ -126,13 +135,24 @@ try_with_retry() {
     return 1
 }
 
+scan_has() {
+    nmcli -t -f SSID device wifi list --rescan yes 2>/dev/null | grep -Fxq -- "$1"
+}
+
 OK=0
-# 第 2 步：先扫一遍，主 SSID 在范围内才连（避免无谓 60s 超时）
-if nmcli -t -f SSID device wifi list --rescan yes 2>/dev/null | grep -Fxq -- "$WIFI_SSID"; then
+# 第 2 步：主 SSID（先扫描确认；扫不到等一轮再扫一次，避免盲连白等）
+if scan_has "$WIFI_SSID"; then
+    log "扫描到主 SSID：$WIFI_SSID"
     try_with_retry "$WIFI_SSID" "$WIFI_PASSWORD" "$WIFI_HIDDEN" && OK=1
 else
-    log "未扫到主 SSID '$WIFI_SSID'，仍尝试直连"
-    try_with_retry "$WIFI_SSID" "$WIFI_PASSWORD" "$WIFI_HIDDEN" && OK=1
+    log "未扫到主 SSID '$WIFI_SSID'，8s 后重扫"
+    sleep 8
+    if scan_has "$WIFI_SSID"; then
+        log "重扫到主 SSID：$WIFI_SSID"
+        try_with_retry "$WIFI_SSID" "$WIFI_PASSWORD" "$WIFI_HIDDEN" && OK=1
+    else
+        log "仍未扫到主 SSID，改走备用"
+    fi
 fi
 
 # 第 3 步：备用 SSID
@@ -141,9 +161,23 @@ if [ "$OK" -eq 0 ] && [ -n "${WIFI_FALLBACK_SSID:-}" ]; then
     try_with_retry "$WIFI_FALLBACK_SSID" "$WIFI_FALLBACK_PASSWORD" "0" && OK=1
 fi
 
+# 第 4 步：防止 NM 在两个频段的 profile 间来回跳（之前 5G profile 拉不起来会把 2.4G 踢掉）
+if [ "$OK" -eq 1 ]; then
+    ACT=$(nmcli -t -f NAME,TYPE connection show --active 2>/dev/null | awk -F: '$2=="802-11-wireless"{print $1; exit}')
+    for n in $(nmcli -t -f NAME,TYPE connection show 2>/dev/null | awk -F: '$2=="802-11-wireless"{print $1}'); do
+        if [ "$n" = "$ACT" ]; then
+            nmcli connection modify "$n" connection.autoconnect yes connection.autoconnect-priority 20 >/dev/null 2>&1 || true
+        else
+            nmcli connection modify "$n" connection.autoconnect no >/dev/null 2>&1 || true
+        fi
+    done
+    log "当前连接：${ACT:-未知}（其它 WiFi profile 已关闭自动连接，防频段互踢）"
+fi
+
 if [ "$OK" -eq 1 ]; then
     IP=$(ip -4 -o addr show wlan0 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -1)
     log "WiFi 就绪，wlan0 IP=${IP:-未知}"
+    iw dev wlan0 link 2>/dev/null | grep -E 'SSID|freq|signal|bitrate' | tr '\n' ' ' | sed 's/^/  链路：/' >>"$LOG"
     # SSH 兜底（镜像里已 enable，这里再确保一次）
     systemctl start ssh 2>/dev/null || true
 else
@@ -213,6 +247,47 @@ if [ -n "$DEVICE_HOSTNAME" ]; then
         sed -i "s/^127\.0\.1\.1.*/127.0.1.1\t$DEVICE_HOSTNAME/" "$ROOTFS/etc/hosts"
     fi
     log "[43-config-env] 固定主机名：$DEVICE_HOSTNAME"
+fi
+
+# ── 6. NetworkManager：关闭扫描随机 MAC（brcmfmac 设置随机 MAC 会报 -52，且易掉线）──
+install -d -m 755 "$ROOTFS/etc/NetworkManager/conf.d"
+cat > "$ROOTFS/etc/NetworkManager/conf.d/99-zt1.conf" <<'NM_EOF'
+# zeroT1：扫描时不随机化 MAC（BCM43455 固件对 set_cur_etheraddr 返回 -52，且随机 MAC
+# 会让 AP 侧会话/漫游判断变差）。连接时也不做 MAC 随机化。
+[device]
+wifi.scan-rand-mac-address=no
+
+[connection]
+wifi.cloned-mac-address=preserve
+NM_EOF
+log "[43-config-env] 已写入 NetworkManager 99-zt1.conf（关闭 MAC 随机化）"
+
+# ── 7. 安装 iw（设置射频国家码；没有它 brcmfmac 固件停在 world 域，5G 频段扫不到）──
+if [ -x "$ROOTFS/usr/sbin/iw" ] || [ -x "$ROOTFS/usr/bin/iw" ]; then
+    log "[43-config-env] iw 已存在，跳过安装"
+else
+    if { command -v qemu-aarch64-static >/dev/null 2>&1 || [ -e "${QEMU_BIN:-/usr/bin/qemu-aarch64-static}" ]; } \
+       && [ -f "$HERE/../../scripts/lib-chroot.sh" ]; then
+        # shellcheck disable=SC1090
+        source "$HERE/../../scripts/lib-chroot.sh"
+        chroot_mount "$ROOTFS"
+        trap 'chroot_umount "$ROOTFS"' EXIT
+        chroot_run "$ROOTFS" /bin/bash -c '
+            export DEBIAN_FRONTEND=noninteractive
+            apt-get update -qq 2>/dev/null || true
+            apt-get install -y --no-install-recommends iw >/dev/null 2>&1 || true
+            command -v iw >/dev/null 2>&1 && echo "[43] iw 安装成功" || echo "[43] WARN: iw 安装失败"
+        '
+        chroot_umount "$ROOTFS"
+        trap - EXIT
+        if [ -x "$ROOTFS/usr/sbin/iw" ] || [ -x "$ROOTFS/usr/bin/iw" ]; then
+            log "[43-config-env] iw 已安装进镜像"
+        else
+            warn "[43-config-env] iw 未装成功（首启 5G 将不可用，2.4G 仍可连）"
+        fi
+    else
+        warn "[43-config-env] 无 qemu/lib-chroot，跳过 iw 安装（首启 5G 将不可用）"
+    fi
 fi
 
 log "[43-config-env] 完成（WiFi=$([ -n "$WIFI_SSID" ] && echo "$WIFI_SSID" || echo 未配置)，SSH=$ENABLE_SSH）"
