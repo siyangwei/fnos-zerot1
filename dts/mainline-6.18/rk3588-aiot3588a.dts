@@ -94,20 +94,20 @@
 			 * 而 139MHz 会让 VOP/TRX 的 MSA 时钟与实际像素时钟不一致，
 			 * 先改成 132MHz 验证“MSA 时钟匹配”假设。
 			 */
-			/* 132MHz 是 dclk_vop1 实际能拿到的时钟（GPLL 1188/9），
-			 * 要让刷新率正好 60Hz，总像素必须 = 132M/60 = 2,200,000：
-			 * htotal 2000 x vtotal 1100 = 2,200,000 → 60.00Hz
-			 *（原先 139MHz/2080x1111 只能跑 57.1Hz）
+			/* 注意：这里必须用面板厂商给的时序（139MHz / 2080x1111）。
+			 * dclk_vop1 实际只会跑 132MHz（GPLL 1188/9），所以真实刷新率是 57.12Hz；
+			 * 曾试过改成 132MHz/2000x1100 恰好 60Hz —— 实测 eDP 屏直接不出图
+			 *（面板 TCON 不接受这套 porch），故回退，保持 57.12Hz。
 			 */
 			clock-frequency = <132000000>;
 			hactive = <1920>;
 			vactive = <1080>;
 			hfront-porch = <40>;
 			hsync-len = <20>;
-			hback-porch = <20>;
+			hback-porch = <100>;
 			vfront-porch = <12>;
 			vsync-len = <4>;
-			vback-porch = <4>;
+			vback-porch = <15>;
 			hsync-active = <0>;
 			vsync-active = <0>;
 			de-active = <0>;
@@ -1199,7 +1199,9 @@
 		device-wakeup-gpios = <&gpio0 RK_PC5 GPIO_ACTIVE_HIGH>;
 		host-wakeup-gpios = <&gpio0 RK_PA0 GPIO_ACTIVE_HIGH>;
 		reset-gpios = <&gpio0 RK_PC6 GPIO_ACTIVE_LOW>;
-		shutdown-gpios = <&gpio0 RK_PC6 GPIO_ACTIVE_LOW>;
+		/* 注意：不能写 shutdown-gpios —— 它和 reset-gpios 是同一个 GPIO0_PC6，
+		 * hci_bcm 会分别请求两次，第二次返回 -EBUSY，导致 probe 失败（2026-10-28 实测）。
+		 * 主线的 bcm 驱动用 reset-gpios 就够了。*/
 		max-speed = <1500000>;
 		vcc-supply = <&vcc_3v3_s0>;
 	};
@@ -1332,11 +1334,17 @@
 		line-name = "usb2-power";
 	};
 
-	/* 扬声器功放使能（低有效，常开） */
+	/*
+	 * 扬声器功放使能（GPIO4_A3，低电平使能，常开）
+	 * 注意：这里必须写 output-high —— 该脚声明为 GPIO_ACTIVE_LOW，
+	 * gpio-hog 的 output-* 用的是"逻辑电平"，output-high(逻辑1) 才会把
+	 * 物理电平拉低 → 功放打开。写 output-low 时实测 debugfs 显示
+	 * "out hi ACTIVE LOW"，物理为高 = 功放关 → 喇叭无声（2026-10-28 踩坑）。
+	 */
 	spk-con-hog {
 		gpio-hog;
 		gpios = <RK_PA3 GPIO_ACTIVE_LOW>;
-		output-low;
+		output-high;
 		line-name = "spk-con";
 	};
 };

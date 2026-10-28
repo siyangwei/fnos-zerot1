@@ -70,14 +70,17 @@ static void zt1_rekick_work(struct work_struct *work)
 	struct drm_atomic_state *st;
 
 	dev_info(dp->dev, "ZT1: full modeset retry (boot quirk)\n");
+	dp->zt1_in_work = true;
 	st = drm_atomic_helper_suspend(dp->drm_dev);
 	if (IS_ERR(st)) {
 		dev_warn(dp->dev, "ZT1: suspend failed %ld\n", PTR_ERR(st));
+		dp->zt1_in_work = false;
 		return;
 	}
 	msleep(150);
 	dev_info(dp->dev, "ZT1: resume ret=%d\n",
 		 drm_atomic_helper_resume(dp->drm_dev, st));
+	dp->zt1_in_work = false;
 }
 
 /* ZT1: eDP output gate lives in vop_grf; mainline vop2 has no eDP support */
@@ -1383,6 +1386,12 @@ static void analogix_dp_bridge_disable(struct drm_bridge *bridge)
 	dp->fast_train_enable = false;
 	dp->psr_supported = false;
 	dp->dpms_mode = DRM_MODE_DPMS_OFF;
+	/* ZT1: re-arm the post-enable re-probe on every disable, so DPMS /
+	 * console-blank wake-ups go through the same full-modeset retry
+	 * as the initial boot. Guarded by zt1_in_work to avoid recursion
+	 * from the work item's own suspend/resume cycle. */
+	if (!dp->zt1_in_work)
+		dp->zt1_rekick_done = false;
 }
 
 static void analogix_dp_bridge_atomic_disable(struct drm_bridge *bridge,

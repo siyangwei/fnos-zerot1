@@ -179,6 +179,7 @@ struct analogix_dp_device {
 	/* ZT1: boot-time re-probe workaround */
 	struct delayed_work	zt1_work;
 	bool			zt1_rekick_done;
+	bool			zt1_in_work;
 };
 
 /* analogix_dp_reg.c */
