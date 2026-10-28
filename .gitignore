@@ -26,3 +26,13 @@ __pycache__/
 # 旧路线 A 中间产物
 /out/
 assets/tools/package-file-tmp
+
+# 内核模块本地编译产物
+kernel-modules/**/*.o
+kernel-modules/**/*.ko
+kernel-modules/**/*.cmd
+kernel-modules/**/.*.cmd
+kernel-modules/**/Module.symvers
+kernel-modules/**/modules.order
+kernel-modules/**/*.mod
+kernel-modules/**/*.mod.c
