@@ -12,7 +12,10 @@
 /fnos/
 /fnos-update/
 /boot/
-/prebuilts
+/prebuilts/*
+!/prebuilts/modules/
+/prebuilts/modules/*
+!/prebuilts/modules/6.18.18-trim/
 
 # Python
 __pycache__/
@@ -36,3 +39,12 @@ kernel-modules/**/Module.symvers
 kernel-modules/**/modules.order
 kernel-modules/**/*.mod
 kernel-modules/**/*.mod.c
+
+# out-of-tree 内核模块源码（.ko 放 prebuilts/modules）
+/kernel-modules/**/*.o
+/kernel-modules/**/*.ko
+/kernel-modules/**/*.mod
+/kernel-modules/**/*.mod.c
+/kernel-modules/**/modules.order
+/kernel-modules/**/Module.symvers
+/kernel-modules/**/.*.cmd
