@@ -13,7 +13,7 @@ set -euo pipefail
 ROOTFS="${1:?usage: $0 <rootfs-dir>}"
 KVER="6.18.18-trim"
 MODBASE="$ROOTFS/lib/modules/$KVER"
-SRC="$(cd "$(dirname "$0")/../.." && pwd)/prebuilts/modules/$KVER"
+SRC="$(cd "$(dirname "$0")/../.." && pwd)/assets/modules/$KVER"
 
 [ -d "$MODBASE" ] || { echo "  跳过：rootfs 中没有 $KVER 模块目录"; exit 0; }
 [ -d "$SRC" ] || { echo "  跳过：$SRC 不存在"; exit 0; }

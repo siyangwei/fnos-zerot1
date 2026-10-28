@@ -12,10 +12,7 @@
 /fnos/
 /fnos-update/
 /boot/
-/prebuilts/*
-!/prebuilts/modules/
-/prebuilts/modules/*
-!/prebuilts/modules/6.18.18-trim/
+/prebuilts/
 
 # Python
 __pycache__/
