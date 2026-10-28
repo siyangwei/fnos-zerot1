@@ -382,7 +382,9 @@
 	clock-names = "clk_mali", "clk_gpu_coregroup",
 		      "clk_gpu_stacks", "clk_gpu";
 	mali-supply = <&vdd_gpu_s0>;
-	mem-supply = <&vdd_gpu_s0>;
+	/* 不要加 mem-supply：OPP 表是单路 3 值 opp-microvolt，两个 supply 会报
+	 * "Invalid number of elements in microvolt property (3) with supplies (2)"
+	 * 且 debugfs 里节点重名（vdd_gpu_s0 冲突）。mainline 只需 mali-supply。 */
 	status = "okay";
 };
 
@@ -550,14 +552,15 @@
 };
 
 /*
- * HDMI1 音频：原厂 dtb 里 hdmi0_sound/hdmi1_sound 都是 disabled，本板同理。
- * 实测：无显示器（无 EDID/ELD）时 hdmi-audio-codec 的 snd_soc_dai_prepare()
- * 恒返回 -ENODEV，同时 PulseAudio 反复尝试打开该声卡，dmesg/journal 每秒刷屏
- * （ASoC error (-19) 与 "HDMI: Unknown ELD version 0" 数千行）。
- * HDMI1 的视频输出不受影响；如需 HDMI 音频可临时改回 okay。
+ * HDMI1 音频：用户要求保留 HDMI 音频输出，故显式启用（原厂生产 dtb 里
+ * hdmi0_sound/hdmi1_sound 其实都是 disabled）。
+ * 已知代价：没有接 HDMI 显示器时（无 EDID/ELD），hdmi-audio-codec 的
+ * snd_soc_dai_prepare() 会返回 -ENODEV，PulseAudio 等用户态会反复尝试打开
+ * 该声卡，dmesg 出现 "ASoC error (-19)" 刷屏；接上显示器后即恢复正常。
+ * 如日后不需要 HDMI 音频、只想清静日志，把本节点改回 disabled 即可。
  */
 &hdmi1_sound {
-	status = "disabled";
+	status = "okay";
 };
 
 /* HDMI IN */
@@ -1166,11 +1169,14 @@
 /* ==================== PWM ==================== */
 
 /* 背光 */
-/* 背光 PWM1 必须用 m0 引脚组（GPIO0_PC0），与原厂 BSP/Android dtb 一致；
- * m1 是 GPIO1_PD3，会和 uart4m0 抢占同一引脚（pinctrl 冲突日志）。 */
+/* 背光 PWM1 必须用 m1 引脚组（GPIO1_PD3）。实测：用 m0（GPIO0_PC0）时
+ * PWM 寄存器正常输出占空比，但屏幕完全无背光（该脚未连到背光电路，
+ * 厂商 dtb 里的 m0 配置对应的是另一种屏幕 SKU）。
+ * 注意：m1 与 uart4m0 的 TX 脚重叠，开机会有 4 行 uart4 pin 申请失败的
+ * 警告，属已知且无害（原可用镜像同样如此）。 */
 &pwm1 {
 	pinctrl-names = "default";
-	pinctrl-0 = <&pwm1m0_pins>;
+	pinctrl-0 = <&pwm1m1_pins>;
 	status = "okay";
 };
 
