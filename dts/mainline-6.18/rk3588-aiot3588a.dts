@@ -361,15 +361,103 @@
 	status = "okay";	/* USB3（usb_host2_xhci / fcd00000） */
 };
 
-/* ==================== GPU / NPU ==================== */
+/* ==================== GPU / NPU / RGA（厂商驱动适配） ====================
+ * fnOS 6.18.18-trim 只带 Rockchip 厂商驱动模块：
+ *   updates/trim/rk_gpu/mali.ko       → 期望 "arm,mali-valhall"
+ *   updates/trim/rk_vcodec/rknpu.ko   → 期望 "rockchip,rk3588-rknpu"
+ *   updates/trim/rk_vcodec/rga3.ko    → 期望 "rockchip,rga3_core0/1"、"rockchip,rga2_core0"
+ * 上游 mainline 的 compatible（rockchip,rk3588-mali / rockchip,rk3588-rknn-core /
+ * rockchip,rk3588-rga）在本内核里没有对应驱动，故按 fnOS 自带厂商 dtb
+ * （usr/lib/linux-image-6.18.18-trim/rockchip/rk3588-nanopc-t6.dtb）改写成厂商形态。
+ */
 
 &gpu {
+	compatible = "arm,mali-valhall";
+	interrupts = <GIC_SPI 94 IRQ_TYPE_LEVEL_HIGH 0>,
+		     <GIC_SPI 93 IRQ_TYPE_LEVEL_HIGH 0>,
+		     <GIC_SPI 92 IRQ_TYPE_LEVEL_HIGH 0>;
+	interrupt-names = "GPU", "MMU", "JOB";
+	clocks = <&scmi_clk SCMI_CLK_GPU>, <&cru CLK_GPU_COREGROUP>,
+		 <&cru CLK_GPU_STACKS>, <&cru CLK_GPU>;
+	clock-names = "clk_mali", "clk_gpu_coregroup",
+		      "clk_gpu_stacks", "clk_gpu";
 	mali-supply = <&vdd_gpu_s0>;
+	mem-supply = <&vdd_gpu_s0>;
 	status = "okay";
 };
 
 &pd_gpu {
 	domain-supply = <&vdd_gpu_s0>;
+};
+
+/* NPU：厂商 rknpu 驱动要求「三核合一」节点（pc/cna/core 三段 reg + 三个中断） */
+&rknn_core_0 {
+	compatible = "rockchip,rk3588-rknpu";
+	reg = <0x0 0xfdab0000 0x0 0x10000>,
+	      <0x0 0xfdac0000 0x0 0x10000>,
+	      <0x0 0xfdad0000 0x0 0x10000>;
+	reg-names = "pc", "cna", "core";
+	interrupts = <GIC_SPI 110 IRQ_TYPE_LEVEL_HIGH 0>,
+		     <GIC_SPI 111 IRQ_TYPE_LEVEL_HIGH 0>,
+		     <GIC_SPI 112 IRQ_TYPE_LEVEL_HIGH 0>;
+	interrupt-names = "npu0_irq", "npu1_irq", "npu2_irq";
+	clocks = <&scmi_clk SCMI_CLK_NPU>,
+		 <&cru ACLK_NPU0>, <&cru ACLK_NPU1>, <&cru ACLK_NPU2>,
+		 <&cru HCLK_NPU0>, <&cru HCLK_NPU1>, <&cru HCLK_NPU2>,
+		 <&cru PCLK_NPU_ROOT>;
+	clock-names = "clk_npu", "aclk0", "aclk1", "aclk2",
+		      "hclk0", "hclk1", "hclk2", "pclk";
+	assigned-clocks = <&scmi_clk SCMI_CLK_NPU>;
+	assigned-clock-rates = <200000000>;
+	resets = <&cru SRST_A_RKNN0>, <&cru SRST_A_RKNN1>, <&cru SRST_A_RKNN2>,
+		 <&cru SRST_H_RKNN0>, <&cru SRST_H_RKNN1>, <&cru SRST_H_RKNN2>;
+	reset-names = "srst_a0", "srst_a1", "srst_a2",
+		      "srst_h0", "srst_h1", "srst_h2";
+	power-domains = <&power RK3588_PD_NPUTOP>,
+			<&power RK3588_PD_NPU1>,
+			<&power RK3588_PD_NPU2>;
+	power-domain-names = "npu0", "npu1", "npu2";
+	iommus = <&rknn_mmu_0>;
+	rknpu-supply = <&vdd_npu_s0>;
+	mem-supply = <&vdd_npu_s0>;
+	status = "okay";
+};
+
+/* 厂商形态：三核共用一个 IOMMU 块（4 段 reg、3 个中断） */
+&rknn_mmu_0 {
+	reg = <0x0 0xfdab9000 0x0 0x100>,
+	      <0x0 0xfdaba000 0x0 0x100>,
+	      <0x0 0xfdaca000 0x0 0x100>,
+	      <0x0 0xfdada000 0x0 0x100>;
+	interrupts = <GIC_SPI 110 IRQ_TYPE_LEVEL_HIGH 0>,
+		     <GIC_SPI 111 IRQ_TYPE_LEVEL_HIGH 0>,
+		     <GIC_SPI 112 IRQ_TYPE_LEVEL_HIGH 0>;
+	interrupt-names = "npu0_mmu", "npu1_mmu", "npu2_mmu";
+	status = "okay";
+};
+
+&rknn_core_1 {
+	status = "disabled";
+};
+
+&rknn_core_2 {
+	status = "disabled";
+};
+
+&rknn_mmu_1 {
+	status = "disabled";
+};
+
+&rknn_mmu_2 {
+	status = "disabled";
+};
+
+/* RGA2：厂商 rga3.ko 内置 rga2_core0 支持 */
+&rga {
+	compatible = "rockchip,rga2_core0";
+	reg = <0x0 0xfdb80000 0x0 0x1000>;
+	clock-names = "aclk_rga2", "hclk_rga2", "clk_rga2";
+	status = "okay";
 };
 
 /* ==================== 显示链路 ==================== */
@@ -1437,5 +1525,63 @@
 		vcc5v0_peripherals_en: vcc5v0-peripherals-en {
 			rockchip,pins = <3 RK_PD5 RK_FUNC_GPIO &pcfg_pull_none>;
 		};
+	};
+};
+
+/* ==================== RGA3（两个核心 + 各自 IOMMU） ====================
+ * 上游 mainline 没有 RGA3 节点；fnOS 的 rga3.ko 需要 rockchip,rga3_core0/1。
+ * 中断/时钟/电源域取自 BSP 6.1 rk3588s.dtsi（同一 SoC）。
+ */
+/ {
+	rga3_0: rga@fdb60000 {
+		compatible = "rockchip,rga3_core0";
+		reg = <0x0 0xfdb60000 0x0 0x1000>;
+		interrupts = <GIC_SPI 114 IRQ_TYPE_LEVEL_HIGH 0>;
+		interrupt-names = "rga3_core0_irq";
+		clocks = <&cru ACLK_RGA3_0>, <&cru HCLK_RGA3_0>,
+			 <&cru CLK_RGA3_0_CORE>;
+		clock-names = "aclk_rga3_0", "hclk_rga3_0", "clk_rga3_0";
+		power-domains = <&power RK3588_PD_RGA30>;
+		iommus = <&rga3_0_mmu>;
+		status = "okay";
+	};
+
+	rga3_0_mmu: iommu@fdb60f00 {
+		compatible = "rockchip,rk3588-iommu", "rockchip,rk3568-iommu",
+			     "rockchip,iommu-v2";
+		reg = <0x0 0xfdb60f00 0x0 0x100>;
+		interrupts = <GIC_SPI 114 IRQ_TYPE_LEVEL_HIGH 0>;
+		interrupt-names = "rga3_0_mmu";
+		clocks = <&cru ACLK_RGA3_0>, <&cru HCLK_RGA3_0>;
+		clock-names = "aclk", "iface";
+		power-domains = <&power RK3588_PD_RGA30>;
+		#iommu-cells = <0>;
+		status = "okay";
+	};
+
+	rga3_1: rga@fdb70000 {
+		compatible = "rockchip,rga3_core1";
+		reg = <0x0 0xfdb70000 0x0 0x1000>;
+		interrupts = <GIC_SPI 115 IRQ_TYPE_LEVEL_HIGH 0>;
+		interrupt-names = "rga3_core1_irq";
+		clocks = <&cru ACLK_RGA3_1>, <&cru HCLK_RGA3_1>,
+			 <&cru CLK_RGA3_1_CORE>;
+		clock-names = "aclk_rga3_1", "hclk_rga3_1", "clk_rga3_1";
+		power-domains = <&power RK3588_PD_RGA31>;
+		iommus = <&rga3_1_mmu>;
+		status = "okay";
+	};
+
+	rga3_1_mmu: iommu@fdb70f00 {
+		compatible = "rockchip,rk3588-iommu", "rockchip,rk3568-iommu",
+			     "rockchip,iommu-v2";
+		reg = <0x0 0xfdb70f00 0x0 0x100>;
+		interrupts = <GIC_SPI 115 IRQ_TYPE_LEVEL_HIGH 0>;
+		interrupt-names = "rga3_1_mmu";
+		clocks = <&cru ACLK_RGA3_1>, <&cru HCLK_RGA3_1>;
+		clock-names = "aclk", "iface";
+		power-domains = <&power RK3588_PD_RGA31>;
+		#iommu-cells = <0>;
+		status = "okay";
 	};
 };
