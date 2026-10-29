@@ -117,6 +117,11 @@ EOF
     mcopy -s -i "$UPDATE_DIR/boot.img" "$BOOT_SRC/extlinux" ::/extlinux
 fi
 
+# ---- 4.9 属主归一（必须！见 scripts/normalize-ownership.sh 头注释）----
+# 历史坑：rootfs 树被污染成 uid 1000 后，postgres 数据目录不可读（web 注册报 4208 数据库读写错误）、
+# sshd 因 /etc/ssh/sshd_config 非 root 拥有而拒绝启动。每次打包前强制校正回官方底稿的属主。
+bash "$HERE/normalize-ownership.sh" "$ROOTFS"
+
 # ---- 5. rootfs.img（btrfs，UUID 与 fstab 一致）----
 # 设 ROOTFS_IMG_REUSE=<现成 rootfs.img> 可跳过 rsync（仅改 boot/uboot 时提速）
 ROOTFS_IMG="$UPDATE_DIR/rootfs.img"

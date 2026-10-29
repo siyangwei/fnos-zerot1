@@ -20,6 +20,9 @@
 #   45-desktop-apps.sh   桌面快捷方式
 #   46-login-home.sh     修 XFCE 登录闪回（pam_mkhomedir + /home + /etc/skel）
 #   47-jack-autoswitch.sh 耳机插入自动静音喇叭（轮询 Headphones Jack 控件）
+#   48-adb-gadget.sh     打开 USB adb（厂商 adbd + 最小 ffs.adb gadget，插 PC 即 adb shell）
+#   49-debug-net.sh      有线调试静态 IP（config.env: DEBUG_ETH_IP，网线直连主机即可 SSH）
+#   51-diag-http.sh    开机自检日志 + :8080 只读 HTTP 日志服务（无串口时远程诊断）
 #   50-watchdog.sh       systemd RuntimeWatchdogSec + watchdog 工具
 #   60-desktop-apps.sh   nm-applet / blueman / chromium / alsa-utils + autostart
 #   70-audio-state.sh    ES8388 喇叭功放使能（spk switch）
