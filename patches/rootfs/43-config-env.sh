@@ -6,7 +6,7 @@
 # 把配置写进镜像：
 #   /etc/zerot1/config.env                构建配置副本（root 600，供开机脚本读取）
 #   /usr/local/sbin/zt1-wifi-connect.sh   首启连 WiFi 脚本（读 /etc/zerot1/config.env）
-#   /etc/systemd/system/zt1-wifi-connect.service  开机执行上面脚本
+#   /etc/systemd/system/zt1-wifi-connect.service  开机执行上面脚本（WiFi 唯一实现）
 #   /etc/ssh/sshd_config.d/00-zerot1.conf root 可密码登录（ENABLE_SSH=1 时）
 #
 # config.env 里可用的变量见仓库根 config.env 注释；以后新增变量（开关某个服务、
@@ -47,24 +47,24 @@ fi
 install -d -m 755 "$ROOTFS/usr/local/sbin"
 cat > "$ROOTFS/usr/local/sbin/zt1-wifi-connect.sh" <<'WIFI_EOF'
 #!/bin/bash
-# zt1-wifi-connect.sh —— 读取 /etc/zerot1/config.env，把设备连到配置的 WiFi
-# 幂等：已连上就直接退出；连不上（不在范围/密码错）会在日志里留原因，然后退出 0
-# 日志：/var/log/zt1-wifi-connect.log
+# zeroT1 首启自动连 WiFi —— 唯一实现，全部参数来自 /etc/zerot1/config.env。
+# 规则：
+#   1) 只读配置，不写死任何 SSID/密码；
+#   2) 幂等：已连上目标 SSID 直接退出；
+#   3) 主 SSID 最多扫 3 轮（每轮 8s），扫不到才用备用 SSID；
+#   4) **不主动断开**已有连接、不做法规域来回切换（旧实现这样干过，会让 5G 每 ~60s 掉线）。
 set -u
-
-ENV_FILE="/etc/zerot1/config.env"
-LOG="/var/log/zt1-wifi-connect.log"
 TAG="zt1-wifi"
-
-log() { printf '%s [%s] %s\n' "$(date '+%F %T')" "$TAG" "$*" | tee -a "$LOG" >/dev/null; }
+LOG=/var/log/zt1-wifi-connect.log
+ENV_FILE=/etc/zerot1/config.env
+log() { echo "$(date '+%F %T') [$TAG] $*" >>"$LOG"; }
 
 [ -r "$ENV_FILE" ] || { echo "$(date '+%F %T') [$TAG] 缺少 $ENV_FILE，跳过" >>"$LOG"; exit 0; }
 # shellcheck disable=SC1090
 . "$ENV_FILE"
 
 [ "${ENABLE_WIFI:-1}" = "1" ] || { log "ENABLE_WIFI=0，跳过"; exit 0; }
-[ -n "${WIFI_SSID:-}" ]      || { log "WIFI_SSID 为空，跳过"; exit 0; }
-
+[ -n "${WIFI_SSID:-}" ] || { log "WIFI_SSID 为空，跳过"; exit 0; }
 command -v nmcli >/dev/null 2>&1 || { log "nmcli 不存在，跳过"; exit 0; }
 
 # 日志限长（保留最后 2000 行）
@@ -72,144 +72,81 @@ if [ -f "$LOG" ] && [ "$(wc -c <"$LOG" 2>/dev/null || echo 0)" -gt 262144 ]; the
     tail -n 2000 "$LOG" >"$LOG.tmp" && mv "$LOG.tmp" "$LOG"
 fi
 
-# 第 0 步：国家码（关键坑）
-#   brcmfmac 只在「法规域发生变更」时才会把 country 下发给固件；开机时如果直接
-#   iw reg set CN，要么请求被忽略、要么早于固件初始化，结果固件一直停在 world
-#   法规域 ⇒ 5G 信道 36-64（5150-5350）永远扫不到，只能看到 5.8G。
-#   实测可靠做法：先设一个不同的国家码（US）制造变化，再设目标国家码（CN），
-#   之后 5G 的 5300MHz(DFS ch60) AP 就能被扫描到并成功连接（390/325Mbps）。
-#   注意：不要用 00 —— brcmf 的 reg_notifier 会忽略 "00"，不产生下发。
+# 法规域：只设置一次（brcmfmac 需要一次「变更」才会把 country 下发给固件）
 if [ -n "${WIFI_COUNTRY:-}" ] && command -v iw >/dev/null 2>&1; then
-    for _try in 1 2 3; do
-        iw reg set US 2>/dev/null || true; sleep 1
-        iw reg set "$WIFI_COUNTRY" 2>/dev/null || true; sleep 1
-        if iw reg get 2>/dev/null | grep -q "^country $WIFI_COUNTRY"; then break; fi
-    done
-    log "国家码：$(iw reg get 2>/dev/null | head -2 | tr '\n' ' ')"
-else
-    log "iw 不可用，跳过国家码设置（5G 可能不可见）"
+    iw reg set "$WIFI_COUNTRY" 2>/dev/null || true
+    log "法规域：$(iw reg get 2>/dev/null | sed -n '2p')"
 fi
 
-# 第 1 步：等 NetworkManager 与 wlan0 就绪（最多 60s）
-for _ in $(seq 1 60); do
-    nmcli -t general status >/dev/null 2>&1 && break
-    sleep 1
-done
+# 等 NetworkManager 与 wlan0 就绪
+for _ in $(seq 1 60); do nmcli -t general status >/dev/null 2>&1 && break; sleep 1; done
 for _ in $(seq 1 30); do
     nmcli -t -f DEVICE,TYPE device status 2>/dev/null | grep -q '^wlan0:wifi$' && break
     sleep 1
 done
 
-connect_one() {
-    local ssid="$1" pass="$2" hidden="${3:-0}" name out
-    name="${ssid//[^A-Za-z0-9_.-]/_}-zt1"
+name_of() { printf '%s' "${1//[^A-Za-z0-9_.-]/_}"; }
+cur_ssid() { iw dev wlan0 link 2>/dev/null | awk '/SSID:/{print $2; exit}'; }
+seen() { nmcli -t -f SSID device wifi list --rescan yes 2>/dev/null | grep -Fxq -- "$1"; }
 
-    # 已存在同名连接：直接拉起（NM 已保存过 PSK）
-    if nmcli -t -f NAME connection show 2>/dev/null | grep -Fxq "$name"; then
-        if nmcli -t -f NAME connection show --active 2>/dev/null | grep -Fxq "$name"; then
-            log "已连接：$ssid"
-            return 0
-        fi
-        out=$(nmcli connection up "$name" 2>&1) && { log "已拉起已保存的连接 $ssid"; return 0; }
-        log "拉起已保存连接失败（$ssid）：$(echo "$out" | tail -n 2 | tr '\n' ' ')"
+connect() {   # $1=ssid $2=pass $3=hidden
+    local ssid="$1" pass="$2" hidden="${3:-0}" name out rc
+    name="$(name_of "$ssid")-zt1"
+    if nmcli -t -f NAME connection show 2>/dev/null | grep -Fxq -- "$name"; then
+        out=$(nmcli connection up "$name" 2>&1) && { log "已连上：$ssid"; return 0; }
+        log "拉起已保存 profile 失败：$ssid（$(printf '%s' "$out" | tail -n 1)）"
+        nmcli connection delete "$name" >/dev/null 2>&1 || true
     fi
-
-    # 新建连接（-- 语义：hidden 需显式声明）
     if [ "$hidden" = "1" ]; then
-        out=$(nmcli device wifi connect "$ssid" password "$pass" name "$name" hidden yes 2>&1)
+        out=$(nmcli device wifi connect "$ssid" password "$pass" name "$name" hidden yes 2>&1); rc=$?
     else
-        out=$(nmcli device wifi connect "$ssid" password "$pass" name "$name" 2>&1)
+        out=$(nmcli device wifi connect "$ssid" password "$pass" name "$name" 2>&1); rc=$?
     fi
-    if [ $? -eq 0 ]; then
-        nmcli connection modify "$name" connection.autoconnect yes 2>/dev/null || true
-        nmcli connection modify "$name" connection.autoconnect-priority 10 2>/dev/null || true
-        log "连接成功：$ssid（已设为自动连接）"
+    if [ "$rc" -eq 0 ]; then
+        nmcli connection modify "$name" connection.autoconnect yes >/dev/null 2>&1 || true
+        log "连接成功：$ssid"
         return 0
     fi
-    log "连接失败（$ssid）：$(echo "$out" | tail -n 2 | tr '\n' ' ')"
+    log "连接失败：$ssid（$(printf '%s' "$out" | tail -n 1)）"
     return 1
 }
 
-try_with_retry() {
-    local ssid="$1" pass="$2" hidden="$3" i
+# 已连上主 SSID 就直接退出（幂等）
+if [ "$(cur_ssid)" = "$WIFI_SSID" ]; then log "已在 $WIFI_SSID，跳过"; exit 0; fi
+
+ok=0
+if seen "$WIFI_SSID"; then
+    connect "$WIFI_SSID" "$WIFI_PASSWORD" "$WIFI_HIDDEN" && ok=1
+else
     for i in 1 2 3; do
-        connect_one "$ssid" "$pass" "$hidden" && return 0
-        sleep 5
-    done
-    return 1
-}
-
-scan_has() {
-    nmcli -t -f SSID device wifi list --rescan yes 2>/dev/null | grep -Fxq -- "$1"
-}
-
-OK=0
-# 第 2 步：主 SSID（5G 的 scan 结果要等固件法规域生效，开机早期常常扫不到，
-# 所以最多扫 3 轮 × 8s，再放弃走备用，避免过快落到 2.4G）
-if scan_has "$WIFI_SSID"; then
-    log "扫描到主 SSID：$WIFI_SSID"
-    try_with_retry "$WIFI_SSID" "$WIFI_PASSWORD" "$WIFI_HIDDEN" && OK=1
-else
-    for _r in 1 2 3; do
-        log "第 ${_r} 轮未扫到主 SSID '$WIFI_SSID'，8s 后重扫"
+        log "第 ${i} 轮未扫到主 SSID $WIFI_SSID，8s 后重扫"
         sleep 8
-        if scan_has "$WIFI_SSID"; then
-            log "第 ${_r} 轮重扫到主 SSID：$WIFI_SSID"
-            try_with_retry "$WIFI_SSID" "$WIFI_PASSWORD" "$WIFI_HIDDEN" && { OK=1; break; }
+        if seen "$WIFI_SSID"; then
+            connect "$WIFI_SSID" "$WIFI_PASSWORD" "$WIFI_HIDDEN" && { ok=1; break; }
         fi
     done
-    if [ "$OK" -eq 0 ]; then
-        # 5G DFS 兜底：主 SSID 常在信道 52-64（DFS），brcmfmac 固件在 CN 法规域下
-        # 平时不扫这些信道；把法规域临时切到 US 再 rescan 会触发固件重扫 DFS，
-        # 此时 NM 能看到 5G AP，连上后再切回 CN，连接保持不断（实测 5300/-36dBm 稳定）。
-        log "3 轮未扫到主 SSID，启用 DFS 兜底（临时 US 法规域触发重扫）"
-        iw reg set US 2>/dev/null || true; sleep 2
-        for _r in 1 2 3; do
-            nmcli device wifi rescan >/dev/null 2>&1
-            sleep 6
-            if scan_has "$WIFI_SSID"; then
-                log "DFS 兜底：第 ${_r} 轮扫到主 SSID：$WIFI_SSID"
-                try_with_retry "$WIFI_SSID" "$WIFI_PASSWORD" "$WIFI_HIDDEN" && { OK=1; break; }
-            else
-                log "DFS 兜底：第 ${_r} 轮仍未扫到"
-                iw reg set US 2>/dev/null || true
-            fi
-        done
-        iw reg set "$WIFI_COUNTRY" 2>/dev/null || true
+fi
+
+# 主 SSID 连不上才用备用
+if [ "$ok" -eq 0 ] && [ -n "${WIFI_FALLBACK_SSID:-}" ]; then
+    log "主 SSID 不可用，尝试备用：$WIFI_FALLBACK_SSID"
+    connect "$WIFI_FALLBACK_SSID" "$WIFI_FALLBACK_PASSWORD" 0 && ok=1
+fi
+
+# 优先级：NM 断线时优先回主 SSID（不遍历改写其它 profile）
+if [ "$ok" -eq 1 ]; then
+    nmcli connection modify "$(name_of "$WIFI_SSID")-zt1" connection.autoconnect-priority 20 >/dev/null 2>&1 || true
+    if [ -n "${WIFI_FALLBACK_SSID:-}" ]; then
+        nmcli connection modify "$(name_of "$WIFI_FALLBACK_SSID")-zt1" connection.autoconnect-priority 10 >/dev/null 2>&1 || true
     fi
-    [ "$OK" -eq 0 ] && log "3 轮（含 DFS 兜底）均未扫到主 SSID，改走备用"
+    _ip=$(ip -4 addr show wlan0 2>/dev/null | awk '/inet /{print $2; exit}')
+    log "wlan0 IP：${_ip:-无}"
 fi
 
-# 第 3 步：备用 SSID
-if [ "$OK" -eq 0 ] && [ -n "${WIFI_FALLBACK_SSID:-}" ]; then
-    log "尝试备用 WiFi：$WIFI_FALLBACK_SSID"
-    try_with_retry "$WIFI_FALLBACK_SSID" "$WIFI_FALLBACK_PASSWORD" "0" && OK=1
+if [ "${ENABLE_SSH:-0}" = "1" ]; then
+    systemctl start ssh 2>/dev/null || systemctl start sshd 2>/dev/null || true
 fi
-
-# 第 4 步：防止 NM 在两个频段的 profile 间来回跳（之前 5G profile 拉不起来会把 2.4G 踢掉）
-if [ "$OK" -eq 1 ]; then
-    ACT=$(nmcli -t -f NAME,TYPE connection show --active 2>/dev/null | awk -F: '$2=="802-11-wireless"{print $1; exit}')
-    main_name="${WIFI_SSID//[^A-Za-z0-9_.-]/_}-zt1"
-    for n in $(nmcli -t -f NAME,TYPE connection show 2>/dev/null | awk -F: '$2=="802-11-wireless"{print $1}'); do
-        if [ "$n" = "$main_name" ]; then
-            nmcli connection modify "$n" connection.autoconnect yes connection.autoconnect-priority 20 >/dev/null 2>&1 || true
-        else
-            nmcli connection modify "$n" connection.autoconnect yes connection.autoconnect-priority 10 >/dev/null 2>&1 || true
-        fi
-    done
-    log "当前连接：${ACT:-未知}（主 SSID 优先级 20 / 备用 10，断线时优先回主）"
-fi
-
-if [ "$OK" -eq 1 ]; then
-    IP=$(ip -4 -o addr show wlan0 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -1)
-    log "WiFi 就绪，wlan0 IP=${IP:-未知}"
-    iw dev wlan0 link 2>/dev/null | grep -E 'SSID|freq|signal|bitrate' | tr '\n' ' ' | sed 's/^/  链路：/' >>"$LOG"
-    # SSH 兜底（镜像里已 enable，这里再确保一次）
-    systemctl start ssh 2>/dev/null || true
-else
-    log "本次未连上 WiFi（可在联网后手动 nmcli，或重插电源重试）"
-fi
-
+[ "$ok" -eq 0 ] && log "未能连接任何 WiFi（NM 会继续按 profile 自愈）"
 exit 0
 WIFI_EOF
 chmod 755 "$ROOTFS/usr/local/sbin/zt1-wifi-connect.sh"
@@ -238,109 +175,19 @@ ln -sfn /etc/systemd/system/zt1-wifi-connect.service \
     "$ROOTFS/etc/systemd/system/multi-user.target.wants/zt1-wifi-connect.service"
 log "[43-config-env] 已启用 zt1-wifi-connect.service"
 
-# ── 3b. 5G 优先升级：开机早期 5G 扫不到会先连 2.4G 备用，连上后定时再试 5G ──────
-cat > "$ROOTFS/usr/local/sbin/zt1-wifi-5g-upgrade.sh" <<'UPG_EOF'
-#!/bin/bash
-# 若当前连的不是主 SSID（通常落到 2.4G 备用），把法规域临时切 US（触发 brcmfmac
-# 固件重扫 DFS 信道）→ NM rescan → 看到 5G 就连上去 → 再切回 CN（连接不断）。
-# 失败则回退到备用连接并恢复 autoconnect；最多尝试 3 次（计数持久化）。
-TAG="zt1-wifi-5g"
-LOG=/var/log/zt1-wifi-connect.log
-ENV_FILE=/etc/zerot1/config.env
-CNT=/var/lib/zt1-wifi5g-attempts
-log() { echo "$(date '+%F %T') [$TAG] $*" >>"$LOG"; }
-[ -r "$ENV_FILE" ] || exit 0
-# shellcheck disable=SC1090
-. "$ENV_FILE"
-[ "${ENABLE_WIFI:-1}" = "1" ] || exit 0
-[ -n "${WIFI_SSID:-}" ] || exit 0
-command -v nmcli >/dev/null 2>&1 || exit 0
-
-name_of() { printf '%s' "${1//[^A-Za-z0-9_.-]/_}"; }
-main=$(name_of "$WIFI_SSID")-zt1
-fallback=""
-[ -n "${WIFI_FALLBACK_SSID:-}" ] && fallback=$(name_of "$WIFI_FALLBACK_SSID")-zt1
-
-conn_up() {   # $1=profile 名 $2=ssid $3=pass
-    if nmcli -t -f NAME connection show 2>/dev/null | grep -Fxq -- "$1"; then
-        nmcli connection up "$1" >>"$LOG" 2>&1
-    else
-        nmcli device wifi connect "$2" password "$3" name "$1" >>"$LOG" 2>&1
-    fi
-}
-
-cur=$(iw dev wlan0 link 2>/dev/null | awk '/SSID:/{print $2; exit}')
-[ "$cur" = "$WIFI_SSID" ] && { rm -f "$CNT"; exit 0; }
-n=$(cat "$CNT" 2>/dev/null || echo 0)
-[ "${n:-0}" -ge 3 ] && exit 0
-
-log "当前 ${cur:-未连接}，尝试切 5G（第 $((n+1)) 次）"
-nmcli device disconnect wlan0 >/dev/null 2>&1
-sleep 2
-seen=0
-for _r in 1 2 3; do
-    iw reg set US 2>/dev/null || true
-    sleep 2
-    nmcli device wifi rescan >/dev/null 2>&1
-    sleep 6
-    if nmcli -t -f SSID device wifi list 2>/dev/null | grep -Fxq -- "$WIFI_SSID"; then
-        seen=1; break
-    fi
-    log "第 ${_r} 次重扫仍未看到 $WIFI_SSID"
+# ── 3b. 清理旧版自动连 WiFi 代码（历史遗留）────────────────────────────────
+# 早期镜像里有「5G 优先升级」脚本 + timer：每 2 分钟 nmcli disconnect 一次再重连，
+# 是「5G 时有时无」的直接原因。现在 WiFi 只由 zt1-wifi-connect.sh 在首启一次连好，
+# 这里把旧单元/脚本从 rootfs 里彻底删掉（升级镜像也干净）。
+rm -f "$ROOTFS/usr/local/sbin/zt1-wifi-5g-upgrade.sh" \
+      "$ROOTFS/etc/systemd/system/zt1-wifi-5g-upgrade.service" \
+      "$ROOTFS/etc/systemd/system/zt1-wifi-5g-upgrade.timer" \
+      "$ROOTFS/var/lib/zt1-wifi5g-attempts"
+for _w in multi-user.target.wants timers.target.wants network-online.target.wants; do
+    rm -f "$ROOTFS/etc/systemd/system/$_w/zt1-wifi-5g-upgrade.timer" \
+          "$ROOTFS/etc/systemd/system/$_w/zt1-wifi-5g-upgrade.service"
 done
-if [ "$seen" = 1 ] && conn_up "$main" "$WIFI_SSID" "$WIFI_PASSWORD"; then
-    log "已切到 5G（$WIFI_SSID）"
-    rm -f "$CNT"
-else
-    echo $((n+1)) > "$CNT"
-    log "未扫到或切换到 5G 失败（第 $((n+1)) 次，最多 3 次），回退"
-    if [ -n "$fallback" ] && conn_up "$fallback" "$WIFI_FALLBACK_SSID" "$WIFI_FALLBACK_PASSWORD"; then
-        log "已回退到 $WIFI_FALLBACK_SSID"
-    elif conn_up "$main" "$WIFI_SSID" "$WIFI_PASSWORD"; then
-        log "已回退到 $WIFI_SSID"
-    else
-        nmcli device set wlan0 autoconnect yes >/dev/null 2>&1 || true
-        nmcli device connect wlan0 >>"$LOG" 2>&1 || true
-        log "回退连接失败，已恢复 wlan0 autoconnect 交给 NM 处理"
-    fi
-fi
-# 无论成功与否都恢复目标国家码（5G 连接在 CN 下保持不断，已实测）
-iw reg set "$WIFI_COUNTRY" 2>/dev/null || true
-exit 0
-
-UPG_EOF
-chmod 755 "$ROOTFS/usr/local/sbin/zt1-wifi-5g-upgrade.sh"
-
-cat > "$ROOTFS/etc/systemd/system/zt1-wifi-5g-upgrade.service" <<'UPGUNIT_EOF'
-[Unit]
-Description=zeroT1 switch to 5G AP when it becomes visible
-After=zt1-wifi-connect.service NetworkManager.service
-Wants=NetworkManager.service
-ConditionPathExists=/etc/zerot1/config.env
-
-[Service]
-Type=oneshot
-ExecStart=/usr/local/sbin/zt1-wifi-5g-upgrade.sh
-TimeoutStartSec=150
-UPGUNIT_EOF
-
-cat > "$ROOTFS/etc/systemd/system/zt1-wifi-5g-upgrade.timer" <<'TMR_EOF'
-[Unit]
-Description=Retry 5G switch after boot
-
-[Timer]
-OnBootSec=90s
-OnUnitActiveSec=2min
-AccuracySec=15s
-Unit=zt1-wifi-5g-upgrade.service
-
-[Install]
-WantedBy=timers.target
-TMR_EOF
-mkdir -p "$ROOTFS/etc/systemd/system/timers.target.wants"
-ln -sfn /etc/systemd/system/zt1-wifi-5g-upgrade.timer \
-    "$ROOTFS/etc/systemd/system/timers.target.wants/zt1-wifi-5g-upgrade.timer"
-log "[43-config-env] 已启用 zt1-wifi-5g-upgrade.timer（开机 2 分钟后尝试切 5G，最多 3 次）"
+log "[43-config-env] 已清理旧版 5G 升级单元（只保留 zt1-wifi-connect.service）"
 
 # ── 4. SSH：root 可密码登录 ────────────────────────────────────────────────
 if [ "$ENABLE_SSH" = "1" ]; then
