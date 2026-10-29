@@ -140,19 +140,21 @@ scan_has() {
 }
 
 OK=0
-# 第 2 步：主 SSID（先扫描确认；扫不到等一轮再扫一次，避免盲连白等）
+# 第 2 步：主 SSID（5G 的 scan 结果要等固件法规域生效，开机早期常常扫不到，
+# 所以最多扫 3 轮 × 8s，再放弃走备用，避免过快落到 2.4G）
 if scan_has "$WIFI_SSID"; then
     log "扫描到主 SSID：$WIFI_SSID"
     try_with_retry "$WIFI_SSID" "$WIFI_PASSWORD" "$WIFI_HIDDEN" && OK=1
 else
-    log "未扫到主 SSID '$WIFI_SSID'，8s 后重扫"
-    sleep 8
-    if scan_has "$WIFI_SSID"; then
-        log "重扫到主 SSID：$WIFI_SSID"
-        try_with_retry "$WIFI_SSID" "$WIFI_PASSWORD" "$WIFI_HIDDEN" && OK=1
-    else
-        log "仍未扫到主 SSID，改走备用"
-    fi
+    for _r in 1 2 3; do
+        log "第 ${_r} 轮未扫到主 SSID '$WIFI_SSID'，8s 后重扫"
+        sleep 8
+        if scan_has "$WIFI_SSID"; then
+            log "第 ${_r} 轮重扫到主 SSID：$WIFI_SSID"
+            try_with_retry "$WIFI_SSID" "$WIFI_PASSWORD" "$WIFI_HIDDEN" && { OK=1; break; }
+        fi
+    done
+    [ "$OK" -eq 0 ] && log "3 轮均未扫到主 SSID，改走备用"
 fi
 
 # 第 3 步：备用 SSID
@@ -164,14 +166,15 @@ fi
 # 第 4 步：防止 NM 在两个频段的 profile 间来回跳（之前 5G profile 拉不起来会把 2.4G 踢掉）
 if [ "$OK" -eq 1 ]; then
     ACT=$(nmcli -t -f NAME,TYPE connection show --active 2>/dev/null | awk -F: '$2=="802-11-wireless"{print $1; exit}')
+    main_name=$(echo "$WIFI_SSID" | tr -c 'A-Za-z0-9_.-' '_')-zt1
     for n in $(nmcli -t -f NAME,TYPE connection show 2>/dev/null | awk -F: '$2=="802-11-wireless"{print $1}'); do
-        if [ "$n" = "$ACT" ]; then
+        if [ "$n" = "$main_name" ]; then
             nmcli connection modify "$n" connection.autoconnect yes connection.autoconnect-priority 20 >/dev/null 2>&1 || true
         else
-            nmcli connection modify "$n" connection.autoconnect no >/dev/null 2>&1 || true
+            nmcli connection modify "$n" connection.autoconnect yes connection.autoconnect-priority 10 >/dev/null 2>&1 || true
         fi
     done
-    log "当前连接：${ACT:-未知}（其它 WiFi profile 已关闭自动连接，防频段互踢）"
+    log "当前连接：${ACT:-未知}（主 SSID 优先级 20 / 备用 10，断线时优先回主）"
 fi
 
 if [ "$OK" -eq 1 ]; then
@@ -211,6 +214,70 @@ mkdir -p "$ROOTFS/etc/systemd/system/multi-user.target.wants"
 ln -sfn /etc/systemd/system/zt1-wifi-connect.service \
     "$ROOTFS/etc/systemd/system/multi-user.target.wants/zt1-wifi-connect.service"
 log "[43-config-env] 已启用 zt1-wifi-connect.service"
+
+# ── 3b. 5G 优先升级：开机早期 5G 扫不到会先连 2.4G 备用，连上后定时再试 5G ──────
+cat > "$ROOTFS/usr/local/sbin/zt1-wifi-5g-upgrade.sh" <<'UPG_EOF'
+#!/bin/bash
+# 若当前连的不是主 SSID（通常落到 2.4G 备用），且主 SSID 已可见，则切到主 SSID。
+# 最多尝试 3 次（失败计数持久化），避免 5G 异常时每 3 分钟抖一次网。
+TAG="zt1-wifi-5g"
+LOG=/var/log/zt1-wifi-connect.log
+ENV_FILE=/etc/zerot1/config.env
+CNT=/var/lib/zt1-wifi5g-attempts
+log() { echo "$(date '+%F %T') [$TAG] $*" >>"$LOG"; }
+[ -r "$ENV_FILE" ] || exit 0
+# shellcheck disable=SC1090
+. "$ENV_FILE"
+[ "${ENABLE_WIFI:-1}" = "1" ] || exit 0
+[ -n "${WIFI_SSID:-}" ] || exit 0
+command -v nmcli >/dev/null 2>&1 || exit 0
+cur=$(iw dev wlan0 link 2>/dev/null | awk '/SSID:/{print $2; exit}')
+[ "$cur" = "$WIFI_SSID" ] && exit 0
+n=$(cat "$CNT" 2>/dev/null || echo 0)
+[ "${n:-0}" -ge 3 ] && exit 0
+nmcli -t -f SSID device wifi list --rescan yes 2>/dev/null | grep -Fxq -- "$WIFI_SSID" || { log "主 SSID 暂不可见，跳过"; exit 0; }
+name=$(echo "$WIFI_SSID" | tr -c 'A-Za-z0-9_.-' '_')-zt1
+log "尝试从 ${cur:-未知} 切到 5G（$WIFI_SSID，第 $((n+1)) 次）"
+if nmcli connection up "$name" >>"$LOG" 2>&1; then
+    log "已切到 5G（$WIFI_SSID）"; rm -f "$CNT"
+else
+    echo $((n+1)) > "$CNT"
+    log "切到 5G 失败（已尝试 $((n+1)) 次，最多 3 次），保持当前连接"
+fi
+exit 0
+UPG_EOF
+chmod 755 "$ROOTFS/usr/local/sbin/zt1-wifi-5g-upgrade.sh"
+
+cat > "$ROOTFS/etc/systemd/system/zt1-wifi-5g-upgrade.service" <<'UPGUNIT_EOF'
+[Unit]
+Description=zeroT1 switch to 5G AP when it becomes visible
+After=zt1-wifi-connect.service NetworkManager.service
+Wants=NetworkManager.service
+ConditionPathExists=/etc/zerot1/config.env
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/zt1-wifi-5g-upgrade.sh
+TimeoutStartSec=60
+UPGUNIT_EOF
+
+cat > "$ROOTFS/etc/systemd/system/zt1-wifi-5g-upgrade.timer" <<'TMR_EOF'
+[Unit]
+Description=Retry 5G switch after boot
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=3min
+AccuracySec=15s
+Unit=zt1-wifi-5g-upgrade.service
+
+[Install]
+WantedBy=timers.target
+TMR_EOF
+mkdir -p "$ROOTFS/etc/systemd/system/timers.target.wants"
+ln -sfn /etc/systemd/system/zt1-wifi-5g-upgrade.timer \
+    "$ROOTFS/etc/systemd/system/timers.target.wants/zt1-wifi-5g-upgrade.timer"
+log "[43-config-env] 已启用 zt1-wifi-5g-upgrade.timer（开机 2 分钟后尝试切 5G，最多 3 次）"
 
 # ── 4. SSH：root 可密码登录 ────────────────────────────────────────────────
 if [ "$ENABLE_SSH" = "1" ]; then

@@ -39,10 +39,10 @@ ExecStart=/bin/sh -c '\
   done; \
   [ -n "$card" ] || { echo "es8388-audio-init: rockchipes8388 not found"; exit 0; }; \
   echo "es8388-audio-init: card=$card"; \
-  amixer -c "$card" sset "Speaker" on  >/dev/null 2>&1 || true; \
-  amixer -c "$card" sset "Headphone" on >/dev/null 2>&1 || true; \
-  amixer -c "$card" sset "spk switch" on >/dev/null 2>&1 || true; \
-  amixer -c "$card" sset "PCM" 192 >/dev/null 2>&1 || true; \
+  amixer -c "$card" sset "PCM" 181 >/dev/null 2>&1 || true; \
+  # 输出级：es8328 的 Output 1/2 默认 0（= -30dB，几乎无声），必须拉到 30(0dB)
+  amixer -c "$card" cset "name='Output 1 Playback Volume'" 30,30 >/dev/null 2>&1 || true; \
+  amixer -c "$card" cset "name='Output 2 Playback Volume'" 30,30 >/dev/null 2>&1 || true; \
   echo "es8388-audio-init: done"'
 
 [Install]

@@ -18,6 +18,8 @@
 #   43-config-env.sh     config.env 落盘 + 首启自动连 WiFi + SSH(root 密码登录)
 #   44-hdmi-audio-logfix.sh HDMI 音频日志治理（无显示器时 PA 忽略 HDMI 声卡）
 #   45-desktop-apps.sh   桌面快捷方式
+#   46-login-home.sh     修 XFCE 登录闪回（pam_mkhomedir + /home + /etc/skel）
+#   47-jack-autoswitch.sh 耳机插入自动静音喇叭（轮询 Headphones Jack 控件）
 #   50-watchdog.sh       systemd RuntimeWatchdogSec + watchdog 工具
 #   60-desktop-apps.sh   nm-applet / blueman / chromium / alsa-utils + autostart
 #   70-audio-state.sh    ES8388 喇叭功放使能（spk switch）

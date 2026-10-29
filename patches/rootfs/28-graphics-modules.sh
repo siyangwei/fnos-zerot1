@@ -28,6 +28,16 @@ snd-soc-es8328-i2c
 # 以太网（GMAC1 + RTL8211）
 dwmac-rk
 stmmac-platform
+# 2D 加速（fnOS 厂商 rga3 模块；开机不加载就没有 /dev/rga）
+rga3
 CONF
 
 echo "  已写入 /etc/modules-load.d/zerot1-hardware.conf"
+
+# /dev/rga 权限：给登录用户（uaccess）与 video 组可读写，浏览器/桌面才能用 2D 加速
+mkdir -p "$ROOTFS/etc/udev/rules.d"
+cat > "$ROOTFS/etc/udev/rules.d/60-zt1-rga.rules" <<'RULE'
+# zeroT1: Rockchip RGA 2D 加速器
+SUBSYSTEM=="misc", KERNEL=="rga", TAG+="uaccess", MODE="0660", GROUP="video"
+RULE
+echo "  已写入 /etc/udev/rules.d/60-zt1-rga.rules"

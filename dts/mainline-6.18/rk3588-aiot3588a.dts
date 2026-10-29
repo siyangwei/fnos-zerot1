@@ -1259,11 +1259,16 @@
 	status = "okay";
 };
 
-/* 业务串口 TTL-2 */
+/*
+ * 业务串口 TTL-2：无法与背光 PWM 共存
+ * uart4m0_xfer 的 TX 脚 = GPIO1_D3（pin 59），而本板背光 PWM1 实际走
+ * pwm1m1_pins = GPIO1_D3（见下方 &pwm1 注释）。两者抢同一根脚，谁后申请
+ * 谁失败：开背光就必然让 uart4 probe 报 "could not request pin 59"。
+ * 2026-10-29 起直接 disabled，既保证背光（eDP 可用）又消掉日志刷屏。
+ * 若将来改用 m0 背光方案的硬件版本，再把这里改回 okay。
+ */
 &uart4 {
-	pinctrl-names = "default";
-	pinctrl-0 = <&uart4m0_xfer>;
-	status = "okay";
+	status = "disabled";
 };
 
 /* 业务串口 RS232-4 */
