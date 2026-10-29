@@ -72,14 +72,18 @@ if [ -f "$LOG" ] && [ "$(wc -c <"$LOG" 2>/dev/null || echo 0)" -gt 262144 ]; the
     tail -n 2000 "$LOG" >"$LOG.tmp" && mv "$LOG.tmp" "$LOG"
 fi
 
-# 第 0 步：国家码（brcmfmac 默认用固件 world 法规域，5G 只剩 2.4G+5.8G；
-# 必须把国家码写给固件，5150-5350(信道36-64) 才会被扫描/连接。实测 CN 可行：
-#   iw reg set CN 后 scan 出现 5300MHz 的 AP，连接 5G 成功（263/390 Mbps）
+# 第 0 步：国家码（关键坑）
+#   brcmfmac 只在「法规域发生变更」时才会把 country 下发给固件；开机时如果直接
+#   iw reg set CN，要么请求被忽略、要么早于固件初始化，结果固件一直停在 world
+#   法规域 ⇒ 5G 信道 36-64（5150-5350）永远扫不到，只能看到 5.8G。
+#   实测可靠做法：先设一个不同的国家码（US）制造变化，再设目标国家码（CN），
+#   之后 5G 的 5300MHz(DFS ch60) AP 就能被扫描到并成功连接（390/325Mbps）。
+#   注意：不要用 00 —— brcmf 的 reg_notifier 会忽略 "00"，不产生下发。
 if [ -n "${WIFI_COUNTRY:-}" ] && command -v iw >/dev/null 2>&1; then
-    for _ in 1 2 3; do
-        iw reg set "$WIFI_COUNTRY" 2>/dev/null || true
-        sleep 2
-        iw reg get 2>/dev/null | grep -q "$WIFI_COUNTRY" && break
+    for _try in 1 2 3; do
+        iw reg set US 2>/dev/null || true; sleep 1
+        iw reg set "$WIFI_COUNTRY" 2>/dev/null || true; sleep 1
+        if iw reg get 2>/dev/null | grep -q "^country $WIFI_COUNTRY"; then break; fi
     done
     log "国家码：$(iw reg get 2>/dev/null | head -2 | tr '\n' ' ')"
 else
@@ -154,7 +158,26 @@ else
             try_with_retry "$WIFI_SSID" "$WIFI_PASSWORD" "$WIFI_HIDDEN" && { OK=1; break; }
         fi
     done
-    [ "$OK" -eq 0 ] && log "3 轮均未扫到主 SSID，改走备用"
+    if [ "$OK" -eq 0 ]; then
+        # 5G DFS 兜底：主 SSID 常在信道 52-64（DFS），brcmfmac 固件在 CN 法规域下
+        # 平时不扫这些信道；把法规域临时切到 US 再 rescan 会触发固件重扫 DFS，
+        # 此时 NM 能看到 5G AP，连上后再切回 CN，连接保持不断（实测 5300/-36dBm 稳定）。
+        log "3 轮未扫到主 SSID，启用 DFS 兜底（临时 US 法规域触发重扫）"
+        iw reg set US 2>/dev/null || true; sleep 2
+        for _r in 1 2 3; do
+            nmcli device wifi rescan >/dev/null 2>&1
+            sleep 6
+            if scan_has "$WIFI_SSID"; then
+                log "DFS 兜底：第 ${_r} 轮扫到主 SSID：$WIFI_SSID"
+                try_with_retry "$WIFI_SSID" "$WIFI_PASSWORD" "$WIFI_HIDDEN" && { OK=1; break; }
+            else
+                log "DFS 兜底：第 ${_r} 轮仍未扫到"
+                iw reg set US 2>/dev/null || true
+            fi
+        done
+        iw reg set "$WIFI_COUNTRY" 2>/dev/null || true
+    fi
+    [ "$OK" -eq 0 ] && log "3 轮（含 DFS 兜底）均未扫到主 SSID，改走备用"
 fi
 
 # 第 3 步：备用 SSID
@@ -166,7 +189,7 @@ fi
 # 第 4 步：防止 NM 在两个频段的 profile 间来回跳（之前 5G profile 拉不起来会把 2.4G 踢掉）
 if [ "$OK" -eq 1 ]; then
     ACT=$(nmcli -t -f NAME,TYPE connection show --active 2>/dev/null | awk -F: '$2=="802-11-wireless"{print $1; exit}')
-    main_name=$(echo "$WIFI_SSID" | tr -c 'A-Za-z0-9_.-' '_')-zt1
+    main_name="${WIFI_SSID//[^A-Za-z0-9_.-]/_}-zt1"
     for n in $(nmcli -t -f NAME,TYPE connection show 2>/dev/null | awk -F: '$2=="802-11-wireless"{print $1}'); do
         if [ "$n" = "$main_name" ]; then
             nmcli connection modify "$n" connection.autoconnect yes connection.autoconnect-priority 20 >/dev/null 2>&1 || true
@@ -218,8 +241,9 @@ log "[43-config-env] 已启用 zt1-wifi-connect.service"
 # ── 3b. 5G 优先升级：开机早期 5G 扫不到会先连 2.4G 备用，连上后定时再试 5G ──────
 cat > "$ROOTFS/usr/local/sbin/zt1-wifi-5g-upgrade.sh" <<'UPG_EOF'
 #!/bin/bash
-# 若当前连的不是主 SSID（通常落到 2.4G 备用），且主 SSID 已可见，则切到主 SSID。
-# 最多尝试 3 次（失败计数持久化），避免 5G 异常时每 3 分钟抖一次网。
+# 若当前连的不是主 SSID（通常落到 2.4G 备用），把法规域临时切 US（触发 brcmfmac
+# 固件重扫 DFS 信道）→ NM rescan → 看到 5G 就连上去 → 再切回 CN（连接不断）。
+# 失败则回退到备用连接并恢复 autoconnect；最多尝试 3 次（计数持久化）。
 TAG="zt1-wifi-5g"
 LOG=/var/log/zt1-wifi-connect.log
 ENV_FILE=/etc/zerot1/config.env
@@ -231,20 +255,59 @@ log() { echo "$(date '+%F %T') [$TAG] $*" >>"$LOG"; }
 [ "${ENABLE_WIFI:-1}" = "1" ] || exit 0
 [ -n "${WIFI_SSID:-}" ] || exit 0
 command -v nmcli >/dev/null 2>&1 || exit 0
+
+name_of() { printf '%s' "${1//[^A-Za-z0-9_.-]/_}"; }
+main=$(name_of "$WIFI_SSID")-zt1
+fallback=""
+[ -n "${WIFI_FALLBACK_SSID:-}" ] && fallback=$(name_of "$WIFI_FALLBACK_SSID")-zt1
+
+conn_up() {   # $1=profile 名 $2=ssid $3=pass
+    if nmcli -t -f NAME connection show 2>/dev/null | grep -Fxq -- "$1"; then
+        nmcli connection up "$1" >>"$LOG" 2>&1
+    else
+        nmcli device wifi connect "$2" password "$3" name "$1" >>"$LOG" 2>&1
+    fi
+}
+
 cur=$(iw dev wlan0 link 2>/dev/null | awk '/SSID:/{print $2; exit}')
-[ "$cur" = "$WIFI_SSID" ] && exit 0
+[ "$cur" = "$WIFI_SSID" ] && { rm -f "$CNT"; exit 0; }
 n=$(cat "$CNT" 2>/dev/null || echo 0)
 [ "${n:-0}" -ge 3 ] && exit 0
-nmcli -t -f SSID device wifi list --rescan yes 2>/dev/null | grep -Fxq -- "$WIFI_SSID" || { log "主 SSID 暂不可见，跳过"; exit 0; }
-name=$(echo "$WIFI_SSID" | tr -c 'A-Za-z0-9_.-' '_')-zt1
-log "尝试从 ${cur:-未知} 切到 5G（$WIFI_SSID，第 $((n+1)) 次）"
-if nmcli connection up "$name" >>"$LOG" 2>&1; then
-    log "已切到 5G（$WIFI_SSID）"; rm -f "$CNT"
+
+log "当前 ${cur:-未连接}，尝试切 5G（第 $((n+1)) 次）"
+nmcli device disconnect wlan0 >/dev/null 2>&1
+sleep 2
+seen=0
+for _r in 1 2 3; do
+    iw reg set US 2>/dev/null || true
+    sleep 2
+    nmcli device wifi rescan >/dev/null 2>&1
+    sleep 6
+    if nmcli -t -f SSID device wifi list 2>/dev/null | grep -Fxq -- "$WIFI_SSID"; then
+        seen=1; break
+    fi
+    log "第 ${_r} 次重扫仍未看到 $WIFI_SSID"
+done
+if [ "$seen" = 1 ] && conn_up "$main" "$WIFI_SSID" "$WIFI_PASSWORD"; then
+    log "已切到 5G（$WIFI_SSID）"
+    rm -f "$CNT"
 else
     echo $((n+1)) > "$CNT"
-    log "切到 5G 失败（已尝试 $((n+1)) 次，最多 3 次），保持当前连接"
+    log "未扫到或切换到 5G 失败（第 $((n+1)) 次，最多 3 次），回退"
+    if [ -n "$fallback" ] && conn_up "$fallback" "$WIFI_FALLBACK_SSID" "$WIFI_FALLBACK_PASSWORD"; then
+        log "已回退到 $WIFI_FALLBACK_SSID"
+    elif conn_up "$main" "$WIFI_SSID" "$WIFI_PASSWORD"; then
+        log "已回退到 $WIFI_SSID"
+    else
+        nmcli device set wlan0 autoconnect yes >/dev/null 2>&1 || true
+        nmcli device connect wlan0 >>"$LOG" 2>&1 || true
+        log "回退连接失败，已恢复 wlan0 autoconnect 交给 NM 处理"
+    fi
 fi
+# 无论成功与否都恢复目标国家码（5G 连接在 CN 下保持不断，已实测）
+iw reg set "$WIFI_COUNTRY" 2>/dev/null || true
 exit 0
+
 UPG_EOF
 chmod 755 "$ROOTFS/usr/local/sbin/zt1-wifi-5g-upgrade.sh"
 
@@ -258,7 +321,7 @@ ConditionPathExists=/etc/zerot1/config.env
 [Service]
 Type=oneshot
 ExecStart=/usr/local/sbin/zt1-wifi-5g-upgrade.sh
-TimeoutStartSec=60
+TimeoutStartSec=150
 UPGUNIT_EOF
 
 cat > "$ROOTFS/etc/systemd/system/zt1-wifi-5g-upgrade.timer" <<'TMR_EOF'
@@ -266,8 +329,8 @@ cat > "$ROOTFS/etc/systemd/system/zt1-wifi-5g-upgrade.timer" <<'TMR_EOF'
 Description=Retry 5G switch after boot
 
 [Timer]
-OnBootSec=2min
-OnUnitActiveSec=3min
+OnBootSec=90s
+OnUnitActiveSec=2min
 AccuracySec=15s
 Unit=zt1-wifi-5g-upgrade.service
 
