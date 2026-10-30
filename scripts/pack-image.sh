@@ -82,7 +82,7 @@ label fnos
     kernel /Image
     fdt /dtb/rockchip/rk3588-aiot3588a.dtb
     initrd /uInitrd
-    append root=UUID=357e9eb7-73ea-4367-b981-6296a97687e0 rootwait rw rootfstype=btrfs rootflags=compress=zstd:1 console=ttyS2,1500000n8 console=tty0 loglevel=7 net.ifnames=0 max_loop=128
+    append root=UUID=357e9eb7-73ea-4367-b981-6296a97687e0 rootwait rw rootfstype=btrfs rootflags=compress=zstd:1 console=ttyS2,1500000n8 console=tty0 quiet loglevel=3 systemd.show_status=0 net.ifnames=0 max_loop=128
 EOF
     USED_MB=$(( $(du -sm "$BOOT_SRC" | cut -f1) ))
     log "boot 分区内容 ${USED_MB}MB / 分区 $(( BOOT_SIZE / 2048 ))MB"
