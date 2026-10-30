@@ -168,6 +168,24 @@ ln -sf /etc/systemd/system/adbd.service \
     "$ROOTFS/etc/systemd/system/multi-user.target.wants/adbd.service"
 log "[48-adb] adbd.service 已设为开机自启"
 
+# ---------- 3.5) adb shell 提示符（厂商 adbd 固定 exec /bin/sh，bash 以 sh 模式读 $ENV） ----------
+cat > "$ROOTFS/etc/zt1-adb-env.sh" <<'ENVFILE'
+# adb shell 交互式提示符：显示设备名（首启向导完成后 /etc/hostname=设备名，如 zerot1）；
+# 出厂未初始化时 hostname=fnnas，这里映射成 zerot1（与「开始使用 fnOS」向导默认设备名一致）
+case "$(hostname 2>/dev/null)" in
+    ""|localhost|fnnas) _zt1_h=zerot1 ;;
+    *)                   _zt1_h=$(hostname) ;;
+esac
+[ -n "${BASH_VERSION:-}" ] && PS1='${_zt1_h}:\w\$ '
+ENVFILE
+mkdir -p "$ROOTFS/etc/systemd/system/adbd.service.d"
+cat > "$ROOTFS/etc/systemd/system/adbd.service.d/10-adb-shell-env.conf" <<'UNIT'
+[Service]
+# /bin/sh(=bash) 以 sh 模式启动时也会读 $ENV —— 用它把提示符从 sh-5.2# 改成 zerot1# 
+Environment=ENV=/etc/zt1-adb-env.sh
+UNIT
+log "[48-adb] adb shell 提示符已配置（ENV=/etc/zt1-adb-env.sh）"
+
 # ---------- 4) 模块自动加载 ----------
 MLOAD="$ROOTFS/etc/modules-load.d/zerot1-hardware.conf"
 mkdir -p "$(dirname "$MLOAD")"
