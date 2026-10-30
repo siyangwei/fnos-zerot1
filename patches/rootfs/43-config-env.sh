@@ -119,6 +119,11 @@ if seen "$WIFI_SSID"; then
     connect "$WIFI_SSID" "$WIFI_PASSWORD" "$WIFI_HIDDEN" && ok=1
 else
     for i in 1 2 3; do
+        if [ "$i" = "2" ] && command -v iw >/dev/null 2>&1; then
+            # 5G 常用 DFS 信道(ch52-64)：CN 域不扫 DFS，切 US 触发固件重扫 DFS
+            iw reg set US 2>/dev/null || true
+            log "主 SSID 未扫到，法规域切 US 触发 DFS 信道扫描"
+        fi
         log "第 ${i} 轮未扫到主 SSID $WIFI_SSID，8s 后重扫"
         sleep 8
         if seen "$WIFI_SSID"; then

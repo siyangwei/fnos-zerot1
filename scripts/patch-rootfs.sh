@@ -23,6 +23,10 @@
 #   48-adb-gadget.sh     打开 USB adb（厂商 adbd + 最小 ffs.adb gadget，插 PC 即 adb shell）
 #   49-debug-net.sh      有线调试静态 IP（config.env: DEBUG_ETH_IP，网线直连主机即可 SSH）
 #   51-diag-http.sh    开机自检日志 + :8080 只读 HTTP 日志服务（无串口时远程诊断）
+#   52-ssh-guard.sh     ssh 自愈（定时确保 sshd 在跑）
+#   53-rk806-rstfix.sh  修「软件重启卡死」：开机把 RK806 SYS_CFG3.RST_FUN 置 MODE1
+#   55-usb-role.sh      Type-C host/device 切换命令（zt1-usb-role）+ adb gadget 自愈
+#   56-fast-reboot.sh   reboot 时写 CRU GLB_SRST_FST，跳过 PSCI+PMIC 的 ~90s 空档
 #   50-watchdog.sh       systemd RuntimeWatchdogSec + watchdog 工具
 #   60-desktop-apps.sh   nm-applet / blueman / chromium / alsa-utils + autostart
 #   70-audio-state.sh    ES8388 喇叭功放使能（spk switch）

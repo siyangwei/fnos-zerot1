@@ -72,9 +72,12 @@ if [ -n "${FNOS_BOOT:-}" ] && [ -f "$FNOS_BOOT/Image" ]; then
     rm -rf "$BOOT_SRC"
     mkdir -p "$BOOT_SRC"
     cp -a "$FNOS_BOOT/." "$BOOT_SRC/"
-    # 确保 dtb 是我们板子的
+    # 确保 dtb 是我们板子的（含 Type-C device 变体，供 zt1-usb-role 切换）
     mkdir -p "$BOOT_SRC/dtb/rockchip"
     cp -f "$IMAGE_DIR/dtb/rockchip/rk3588-aiot3588a.dtb" "$BOOT_SRC/dtb/rockchip/"
+    if [ -f "$IMAGE_DIR/dtb/rockchip/rk3588-aiot3588a-usbdev.dtb" ]; then
+        cp -f "$IMAGE_DIR/dtb/rockchip/rk3588-aiot3588a-usbdev.dtb" "$BOOT_SRC/dtb/rockchip/"
+    fi
     # 第二条引导路径：extlinux.conf（distro_bootcmd 扫完 boot.scr 后会试 sysboot）
     mkdir -p "$BOOT_SRC/extlinux"
     cat > "$BOOT_SRC/extlinux/extlinux.conf" <<'EOF'
@@ -84,6 +87,14 @@ label fnos
     initrd /uInitrd
     append root=UUID=357e9eb7-73ea-4367-b981-6296a97687e0 rootwait rw rootfstype=btrfs rootflags=compress=zstd:1 console=ttyS2,1500000n8 console=tty0 quiet loglevel=3 systemd.show_status=0 net.ifnames=0 max_loop=128
 EOF
+    # USB_ROLE=device（默认）时用 Type-C device 变体 dtb：接 PC 即可 adb
+    if [ "${USB_ROLE:-device}" != "host" ] && [ -f "$BOOT_SRC/dtb/rockchip/rk3588-aiot3588a-usbdev.dtb" ]; then
+        sed -i "s#fdt /dtb/rockchip/rk3588-aiot3588a.dtb#fdt /dtb/rockchip/rk3588-aiot3588a-usbdev.dtb#" \
+            "$BOOT_SRC/extlinux/extlinux.conf"
+        log "USB_ROLE=${USB_ROLE:-device}：默认 dtb = rk3588-aiot3588a-usbdev.dtb（Type-C device）"
+    else
+        log "USB_ROLE=host：默认 dtb = rk3588-aiot3588a.dtb（Type-C host/otg）"
+    fi
     USED_MB=$(( $(du -sm "$BOOT_SRC" | cut -f1) ))
     log "boot 分区内容 ${USED_MB}MB / 分区 $(( BOOT_SIZE / 2048 ))MB"
     [ "$USED_MB" -lt $(( BOOT_SIZE / 2048 - 6 )) ] || die "boot 分区空间不足（内容 ${USED_MB}MB）"

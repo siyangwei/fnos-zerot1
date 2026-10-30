@@ -657,13 +657,33 @@
 		compatible = "fcs,fusb302";
 		reg = <0x22>;
 		interrupt-parent = <&gpio0>;
-		interrupts = <RK_PD3 IRQ_TYPE_LEVEL_LOW>;
+		interrupts = <RK_PD3 IRQ_TYPE_EDGE_FALLING>;
+		int-n-gpios = <&gpio0 RK_PD3 GPIO_ACTIVE_LOW>;
 		pinctrl-names = "default";
 		pinctrl-0 = <&usbc0_int>;
 		vbus-supply = <&vbus5v0_typec>;
 		status = "okay";
 
-		connector {
+		/* Type-C 角色切换（host/device）。
+		 * 注意：原厂（vendor 6.18 内核）把 usb-role-switch 的 graph 端点
+		 * 挂在 typec 端口节点本身，而不是 connector 下面；挂到 connector
+		 * 下会导致 dwc3 的 role-switch 一直 waiting_for_supplier，
+		 * /sys/class/usb_role/.../role 不存在、无法从用户态切角色。
+		 */
+		ports {
+			#address-cells = <1>;
+			#size-cells = <0>;
+
+			port@0 {
+				reg = <0>;
+				usbc0_role_sw: endpoint@0 {
+					reg = <0>;
+					remote-endpoint = <&usb_host0_xhci_drd_sw>;
+				};
+			};
+		};
+
+		usbc0_con: connector {
 			compatible = "usb-c-connector";
 			data-role = "dual";
 			label = "USB-C";
@@ -671,7 +691,9 @@
 			power-role = "dual";
 			sink-pdos = <PDO_FIXED(5000, 3000, PDO_FIXED_USB_COMM)>;
 			source-pdos = <PDO_FIXED(5000, 2000, PDO_FIXED_USB_COMM)>;
-			try-power-role = "source";
+			/* 原厂为 sink：板子默认从 Type-C 取电、作为 device 端，
+			 * 接 PC 时才能被枚举成 adb 设备。 */
+			try-power-role = "sink";
 
 			ports {
 				#address-cells = <1>;
@@ -679,20 +701,13 @@
 
 				port@0 {
 					reg = <0>;
-					usbc0_hs: endpoint {
-						remote-endpoint = <&usb_host0_xhci_drd_sw>;
-					};
-				};
-
-				port@1 {
-					reg = <1>;
 					usbc0_ss: endpoint {
 						remote-endpoint = <&usbdp_phy0_typec_ss>;
 					};
 				};
 
-				port@2 {
-					reg = <2>;
+				port@1 {
+					reg = <1>;
 					usbc0_sbu: endpoint {
 						remote-endpoint = <&usbdp_phy0_typec_sbu>;
 					};
@@ -1379,12 +1394,18 @@
 };
 
 &usb_host0_xhci {
+	/* 正常（host/otg）模式。接 PC 需要 adb 时用 usbdev 变体 dtb：
+	 * dts/mainline-6.18/rk3588-aiot3588a-usbdev.dts（dr_mode=peripheral）。 */
 	usb-role-switch;
 	status = "okay";
 
 	port {
-		usb_host0_xhci_drd_sw: endpoint {
-			remote-endpoint = <&usbc0_hs>;
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		usb_host0_xhci_drd_sw: endpoint@0 {
+			reg = <0>;
+			remote-endpoint = <&usbc0_role_sw>;
 		};
 	};
 };

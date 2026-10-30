@@ -1,0 +1,17 @@
+// SPDX-License-Identifier: (GPL-2.0+ OR MIT)
+/*
+ * zeroT1（AIOT-3588A）USB 变体设备树：Type-C 固定 device 模式（接 PC 出 adb）。
+ * 该模式下禁用 fusb302/tcpm（其 role-switch 依赖 vendor 的 supplier 机制，
+ * 在 dr_mode=peripheral 时注册不上，会 -EPROBE_DEFER），由 dwc3 直接做 gadget。
+ * 切换方式：改 /boot/extlinux/extlinux.conf 的 fdt 行 + 重启（见 zt1-usb-role）。
+ */
+#include "rk3588-aiot3588a.dts"
+
+&usb_host0_xhci {
+	dr_mode = "peripheral";
+	/delete-property/ usb-role-switch;
+};
+
+&usbc0 {
+	status = "disabled";
+};
