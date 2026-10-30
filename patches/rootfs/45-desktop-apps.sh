@@ -55,7 +55,15 @@ Terminal=false
 Categories=System;
 FNOS
 chmod +x "$ROOTFS/usr/share/applications/fnos-manager.desktop"
-cp "$ROOTFS/usr/share/applications/fnos-manager.desktop" "$ROOTFS/root/桌面/fnOS管理.desktop"
-chmod +x "$ROOTFS/root/桌面/fnOS管理.desktop"
+# 入口放三处：
+#  1) /usr/share/applications —— 所有用户的应用菜单里都能看到
+#  2) /etc/skel/Desktop + /etc/skel/桌面 —— 向导新建的管理员用户登录 XFCE 后桌面就有图标
+#     （XFCE 中文环境的桌面目录是「桌面」，英文是 Desktop，两个都放）
+#  3) /root/桌面 —— root 桌面
+mkdir -p "$ROOTFS/etc/skel/Desktop" "$ROOTFS/etc/skel/桌面" "$ROOTFS/root/桌面"
+for d in "$ROOTFS/etc/skel/Desktop" "$ROOTFS/etc/skel/桌面" "$ROOTFS/root/桌面"; do
+    cp "$ROOTFS/usr/share/applications/fnos-manager.desktop" "$d/fnOS管理.desktop"
+    chmod +x "$d/fnOS管理.desktop"
+done
 
 log "[45-desktop] Chromium --no-sandbox / mpv / fnOS 管理入口 已配置"

@@ -34,6 +34,23 @@ mkdir -p /var/log
   echo "--- sshd -t:"; /usr/sbin/sshd -t 2>&1 || true
   echo "--- adbd log:"; tail -40 /var/log/zt1-adbd.log 2>/dev/null || true
   echo "--- wifi log:"; tail -40 /var/log/zt1-wifi-connect.log 2>/dev/null || true
+  echo "--- eth0:"; ip -br addr show eth0 2>/dev/null || true
+  for f in carrier speed duplex operstate; do
+    printf 'eth0/%s=%s ' "$f" "$(cat /sys/class/net/eth0/$f 2>/dev/null)"
+  done; echo
+  echo "--- ethtool eth0 (link/speed/wol):"
+  ethtool eth0 2>/dev/null | grep -Ei 'link detected|speed|duplex|wake-on|supports wake-on|advertised link modes' || echo "(ethtool 无输出)"
+  echo "--- phy:"; ls -l /sys/class/mdio_bus/*/ 2>/dev/null | head -20
+  for p in /sys/class/mdio_bus/*/*/; do
+    [ -f "$p/phy_id" ] || continue
+    echo "phy $p id=$(cat "$p/phy_id" 2>/dev/null) driver=$(basename "$(readlink -f "$p/driver" 2>/dev/null)" 2>/dev/null)"
+  done
+  echo "--- nmcli devices:"; nmcli -t -f DEVICE,TYPE,STATE,CONNECTION device status 2>/dev/null | head -10
+  echo "--- ethernet dmesg:"; dmesg 2>/dev/null | grep -iE 'gmac|stmmac|motorcomm|yt85|eth0' | tail -40 || true
+  echo "--- firewall (fnOS security_service 可能拦 eth0):"
+  nft list ruleset 2>/dev/null | head -80 || true
+  iptables -S 2>/dev/null | head -40 || true
+  systemctl is-active security_service 2>/dev/null || true
 } >> "$OUT" 2>&1
 # 只保留最近 3 次
 [ -f "$OUT" ] && tail -c 400000 "$OUT" > "$OUT.tmp" 2>/dev/null && mv "$OUT.tmp" "$OUT"

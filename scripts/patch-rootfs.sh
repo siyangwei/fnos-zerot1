@@ -41,6 +41,8 @@
 set -euo pipefail
 
 ROOTFS="${1:?usage: $0 <rootfs-dir> [--only NN,NN] [--list]}"
+# 补丁脚本通过 $ROOTFS 环境变量取目标目录（lib-common.sh），这里必须导出
+export ROOTFS
 shift || true
 
 MODE="all"
