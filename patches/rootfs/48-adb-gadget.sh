@@ -83,15 +83,30 @@ do_start() {
     mkdir -p "$FFS_DIR"
     mountpoint -q "$FFS_DIR" || mount -t functionfs adb "$FFS_DIR"
 
-    # adbd 先起来等 functionfs，再绑 UDC
+    # adbd 先起来并等它把 functionfs 的端点/描述符准备好（ready=1），再绑 UDC；
+    # 否则 host 拿到的是一个没有 configuration 的坏设备（no configurations, error -22）
     start-stop-daemon --stop --quiet --exec /usr/bin/adbd 2>/dev/null
     start-stop-daemon --start --quiet --background --exec /usr/bin/adbd
-    for i in $(seq 1 30); do [ -e /dev/usb-ffs/adb/ep0 ] && break; sleep 0.1; done
+    for i in $(seq 1 100); do
+        [ "$(cat "$G/functions/ffs.adb/ready" 2>/dev/null)" = "1" ] && break
+        sleep 0.1
+    done
 
-    UDC="$(ls /sys/class/udc | head -1)"
+    # fnOS 内核 composite 在 SuperSpeed 下只统计 c->superspeed（ffs.adb 无 SS 描述符 ⇒ 计数 0 ⇒
+    # host 报 "no configurations, error -22"），因此把 gadget 限制在 HighSpeed 才能枚举
+    if [ -w "$G/max_speed" ]; then echo high-speed > "$G/max_speed" 2>/dev/null || true; fi
+
+    UDC="$(ls /sys/class/udc 2>/dev/null | head -1)"
     if [ -z "${UDC:-}" ]; then log "ERROR: 没有 UDC（检查 Type-C 是否插到主机）"; return 1; fi
-    echo "$UDC" > "$G/UDC"
-    log "adbd gadget started on $UDC"
+    for i in $(seq 1 60); do
+        if echo "$UDC" > "$G/UDC" 2>/dev/null; then
+            log "adbd gadget started on $UDC (ready=$(cat "$G/functions/ffs.adb/ready" 2>/dev/null))"
+            return 0
+        fi
+        sleep 1
+    done
+    log "ERROR: 绑定 UDC $UDC 失败（dwc3 可能还在 host 模式，等 adb-watch 重试）"
+    return 1
 }
 
 do_stop() {

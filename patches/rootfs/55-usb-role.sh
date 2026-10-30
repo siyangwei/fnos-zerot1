@@ -30,9 +30,10 @@ case "${1:-status}" in
     d=$(cur_dtb); printf '当前 dtb: %s\n' "${d:-未知}"
     case "$d" in
       "$DEV_DTB") echo "Type-C 角色: device（接 PC 可 adb）" ;;
-      "$HOST_DTB") echo "Type-C 角色: host/otg" ;;
+      "$HOST_DTB") echo "Type-C 角色: host/otg（插 PC 自动切 device）" ;;
       *) echo "Type-C 角色: 未知" ;;
     esac
+    exit 0
     ;;
   device) want="$DEV_DTB" ;;
   host)   want="$HOST_DTB" ;;
