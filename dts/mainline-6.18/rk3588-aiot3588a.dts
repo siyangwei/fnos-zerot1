@@ -48,6 +48,10 @@
 		mmc0 = &sdhci;
 		mmc1 = &sdmmc;
 		mmc2 = &sdio;
+		/* 厂商 mpp_rkvdec2 驱动用 of_alias_get_id(np, "rkvdec") 取 core_id，
+		 * core0 才会注册进 mpp service，所以别名必须有 */
+		rkvdec0 = &rkvdec0;
+		rkvdec1 = &rkvdec1;
 	};
 
 	chosen {
@@ -1625,5 +1629,284 @@
 		power-domains = <&power RK3588_PD_RGA31>;
 		#iommu-cells = <0>;
 		status = "okay";
+	};
+};
+
+/* ==================== VPU 硬解/硬编（厂商 MPP，rk_vcodec.ko） ====================
+ *
+ * 为什么以前不通：fnOS 内核自带厂商模块 rk_vcodec.ko（Rockchip MPP service
+ * driver，/lib/modules/6.18.18-trim/updates/trim/rk_vcodec/rk_vcodec.ko，开机
+ * 就 lsmod 可见），但它只匹配厂商 compatible（rockchip,mpp-service /
+ * rockchip,vpu-decoder-v2 / rockchip,vpu-encoder-v2 / rockchip,rkv-decoder-v2 …）；
+ * 而 mainline 6.18 的 rk3588-base.dtsi 在 fdb50000/fdb50400 上给的是
+ * rockchip,rk3588-vpu121（mainline hantro 驱动，本内核没编 CONFIG_VIDEO_HANTRO）
+ * ⇒ 从来没有驱动去 probe，自然没有 /dev/mpp_service，ffmpeg 的 rkmpp 硬解也起不来。
+ *
+ * 做法：把这两个地址改成厂商风格节点，挂到厂商的 mpp-srv 容器下；IOMMU 直接复用
+ * mainline dtsi 的 vpu121_mmu（compatible = rockchip,rk3588-iommu，fnOS 的
+ * rockchip-iommu 驱动是 mainline + 厂商补丁版，导出 rockchip_iommu_enable/… 接口）。
+ * 同板 RGA3（rga3.ko + 同样风格的 iommu 节点）已验证这条路在本内核可用。
+ *
+ * 属性/中断/时钟值全部取自 BSP 6.1 rk3588s.dtsi（同一 SoC，第 4587/4609 行）。
+ */
+&vpu121 {
+	status = "disabled";
+};
+
+/* mainline 的 av1d 节点（rockchip,rk3588-av1-vpu，mainline 无驱动）让位给
+ * 下面的厂商 av1d 节点；两者同地址但节点名不同，dtc 不冲突 */
+&av1d {
+	status = "disabled";
+};
+
+/ {
+	/* 厂商 MPP 服务的容器节点，子节点通过 rockchip,srv phandle 挂上来 */
+	mpp_srv: mpp-srv {
+		compatible = "rockchip,mpp-service";
+		rockchip,taskqueue-count = <12>;
+		rockchip,resetgroup-count = <1>;
+		status = "okay";
+	};
+
+	vepu: vepu@fdb50000 {
+		compatible = "rockchip,vpu-encoder-v2";
+		reg = <0x0 0xfdb50000 0x0 0x400>;
+		interrupts = <GIC_SPI 120 IRQ_TYPE_LEVEL_HIGH 0>;
+		interrupt-names = "irq_vepu";
+		clocks = <&cru ACLK_VPU>, <&cru HCLK_VPU>;
+		clock-names = "aclk_vcodec", "hclk_vcodec";
+		rockchip,normal-rates = <594000000>, <0>;
+		assigned-clocks = <&cru ACLK_VPU>;
+		assigned-clock-rates = <594000000>;
+		resets = <&cru SRST_A_VPU>, <&cru SRST_H_VPU>;
+		reset-names = "shared_video_a", "shared_video_h";
+		rockchip,skip-pmu-idle-request;
+		rockchip,disable-auto-freq;
+		iommus = <&vpu121_mmu>;
+		rockchip,srv = <&mpp_srv>;
+		rockchip,taskqueue-node = <0>;
+		rockchip,resetgroup-node = <0>;
+		power-domains = <&power RK3588_PD_VDPU>;
+		status = "okay";
+	};
+
+	vdpu: vdpu@fdb50400 {
+		compatible = "rockchip,vpu-decoder-v2";
+		reg = <0x0 0xfdb50400 0x0 0x400>;
+		interrupts = <GIC_SPI 119 IRQ_TYPE_LEVEL_HIGH 0>;
+		interrupt-names = "irq_vdpu";
+		clocks = <&cru ACLK_VPU>, <&cru HCLK_VPU>;
+		clock-names = "aclk_vcodec", "hclk_vcodec";
+		rockchip,normal-rates = <594000000>, <0>;
+		assigned-clocks = <&cru ACLK_VPU>;
+		assigned-clock-rates = <594000000>;
+		resets = <&cru SRST_A_VPU>, <&cru SRST_H_VPU>;
+		reset-names = "shared_video_a", "shared_video_h";
+		rockchip,skip-pmu-idle-request;
+		rockchip,disable-auto-freq;
+		iommus = <&vpu121_mmu>;
+		rockchip,srv = <&mpp_srv>;
+		rockchip,taskqueue-node = <0>;
+		rockchip,resetgroup-node = <0>;
+		power-domains = <&power RK3588_PD_VDPU>;
+		status = "okay";
+	};
+
+	/* ---- RKVDEC0/1：HEVC/VP9 硬解（8K 解码核，经 CCU 协同） ----
+	 * VDPU2 只覆盖 H.264/VP9 的一部分，HEVC 解码走 rkvdec。
+	 * fnOS 的 rk_vcodec.ko 里 mpp_rkvdec2 驱动按节点名分流：
+	 * 名字含 "ccu" → ccu 驱动，含 "core" → 解码核（需要 rockchip,ccu /
+	 * rockchip,sram / rockchip,rcb-* 属性，缺一个就 probe 失败）。
+	 * sram 分区加在 &system_sram2 下（见文件末尾附近）。
+	 */
+	rkvdec_ccu: rkvdec-ccu@fdc30000 {
+		compatible = "rockchip,rkv-decoder-v2-ccu";
+		reg = <0x0 0xfdc30000 0x0 0x100>;
+		reg-names = "ccu";
+		clocks = <&cru ACLK_RKVDEC_CCU>;
+		clock-names = "aclk_ccu";
+		assigned-clocks = <&cru ACLK_RKVDEC_CCU>;
+		assigned-clock-rates = <600000000>;
+		resets = <&cru SRST_A_RKVDEC_CCU>;
+		reset-names = "video_ccu";
+		rockchip,skip-pmu-idle-request;
+		/* 1: soft ccu（任务级调度，RK3588 官方用法） */
+		rockchip,ccu-mode = <1>;
+		power-domains = <&power RK3588_PD_RKVDEC0>;
+		status = "okay";
+	};
+
+	rkvdec0: rkvdec-core@fdc38000 {
+		compatible = "rockchip,rkv-decoder-v2";
+		reg = <0x0 0xfdc38100 0x0 0x400>, <0x0 0xfdc38000 0x0 0x100>;
+		reg-names = "regs", "link";
+		interrupts = <GIC_SPI 95 IRQ_TYPE_LEVEL_HIGH 0>;
+		interrupt-names = "irq_rkvdec0";
+		clocks = <&cru ACLK_RKVDEC0>, <&cru HCLK_RKVDEC0>,
+			 <&cru CLK_RKVDEC0_CORE>, <&cru CLK_RKVDEC0_CA>,
+			 <&cru CLK_RKVDEC0_HEVC_CA>;
+		clock-names = "aclk_vcodec", "hclk_vcodec", "clk_core",
+			      "clk_cabac", "clk_hevc_cabac";
+		rockchip,normal-rates = <800000000>, <0>, <600000000>,
+					<600000000>, <1000000000>;
+		assigned-clocks = <&cru ACLK_RKVDEC0>, <&cru CLK_RKVDEC0_CORE>,
+				  <&cru CLK_RKVDEC0_CA>, <&cru CLK_RKVDEC0_HEVC_CA>;
+		assigned-clock-rates = <800000000>, <600000000>,
+				       <600000000>, <1000000000>;
+		resets = <&cru SRST_A_RKVDEC0>, <&cru SRST_H_RKVDEC0>,
+			 <&cru SRST_RKVDEC0_CORE>, <&cru SRST_RKVDEC0_CA>,
+			 <&cru SRST_RKVDEC0_HEVC_CA>;
+		reset-names = "video_a", "video_h", "video_core",
+			      "video_cabac", "video_hevc_cabac";
+		rockchip,skip-pmu-idle-request;
+		iommus = <&rkvdec0_mmu>;
+		rockchip,srv = <&mpp_srv>;
+		rockchip,ccu = <&rkvdec_ccu>;
+		rockchip,core-mask = <0x00010001>;
+		rockchip,task-capacity = <16>;
+		rockchip,taskqueue-node = <9>;
+		rockchip,sram = <&rkvdec0_sram>;
+		/* rcb_iova: start and size 1M@4095M */
+		rockchip,rcb-iova = <0xFFF00000 0x100000>;
+		rockchip,rcb-info = <136 24576>, <137 49152>, <141 90112>,
+				    <140 49152>, <139 180224>, <133 49152>,
+				    <134 8192>, <135 4352>, <138 13056>,
+				    <142 291584>;
+		rockchip,rcb-min-width = <512>;
+		power-domains = <&power RK3588_PD_RKVDEC0>;
+		status = "okay";
+	};
+
+	rkvdec0_mmu: iommu@fdc38700 {
+		compatible = "rockchip,rk3588-iommu", "rockchip,rk3568-iommu";
+		reg = <0x0 0xfdc38700 0x0 0x40>, <0x0 0xfdc38740 0x0 0x40>;
+		interrupts = <GIC_SPI 96 IRQ_TYPE_LEVEL_HIGH 0>;
+		interrupt-names = "irq_rkvdec0_mmu";
+		clocks = <&cru ACLK_RKVDEC0>, <&cru HCLK_RKVDEC0>;
+		clock-names = "aclk", "iface";
+		rockchip,disable-mmu-reset;
+		#iommu-cells = <0>;
+		power-domains = <&power RK3588_PD_RKVDEC0>;
+		status = "okay";
+	};
+
+	rkvdec1: rkvdec-core@fdc48000 {
+		compatible = "rockchip,rkv-decoder-v2";
+		reg = <0x0 0xfdc48100 0x0 0x400>, <0x0 0xfdc48000 0x0 0x100>;
+		reg-names = "regs", "link";
+		interrupts = <GIC_SPI 97 IRQ_TYPE_LEVEL_HIGH 0>;
+		interrupt-names = "irq_rkvdec1";
+		clocks = <&cru ACLK_RKVDEC1>, <&cru HCLK_RKVDEC1>,
+			 <&cru CLK_RKVDEC1_CORE>, <&cru CLK_RKVDEC1_CA>,
+			 <&cru CLK_RKVDEC1_HEVC_CA>;
+		clock-names = "aclk_vcodec", "hclk_vcodec", "clk_core",
+			      "clk_cabac", "clk_hevc_cabac";
+		rockchip,normal-rates = <800000000>, <0>, <600000000>,
+					<600000000>, <1000000000>;
+		assigned-clocks = <&cru ACLK_RKVDEC1>, <&cru CLK_RKVDEC1_CORE>,
+				  <&cru CLK_RKVDEC1_CA>, <&cru CLK_RKVDEC1_HEVC_CA>;
+		assigned-clock-rates = <800000000>, <600000000>,
+				       <600000000>, <1000000000>;
+		resets = <&cru SRST_A_RKVDEC1>, <&cru SRST_H_RKVDEC1>,
+			 <&cru SRST_RKVDEC1_CORE>, <&cru SRST_RKVDEC1_CA>,
+			 <&cru SRST_RKVDEC1_HEVC_CA>;
+		reset-names = "video_a", "video_h", "video_core",
+			      "video_cabac", "video_hevc_cabac";
+		rockchip,skip-pmu-idle-request;
+		iommus = <&rkvdec1_mmu>;
+		rockchip,srv = <&mpp_srv>;
+		rockchip,ccu = <&rkvdec_ccu>;
+		rockchip,core-mask = <0x00020002>;
+		rockchip,task-capacity = <16>;
+		rockchip,taskqueue-node = <9>;
+		rockchip,sram = <&rkvdec1_sram>;
+		/* rcb_iova: start and size 1M@4094M */
+		rockchip,rcb-iova = <0xFFE00000 0x100000>;
+		rockchip,rcb-info = <136 24576>, <137 49152>, <141 90112>,
+				    <140 49152>, <139 180224>, <133 49152>,
+				    <134 8192>, <135 4352>, <138 13056>,
+				    <142 291584>;
+		rockchip,rcb-min-width = <512>;
+		power-domains = <&power RK3588_PD_RKVDEC1>;
+		status = "okay";
+	};
+
+	rkvdec1_mmu: iommu@fdc48700 {
+		compatible = "rockchip,rk3588-iommu", "rockchip,rk3568-iommu";
+		reg = <0x0 0xfdc48700 0x0 0x40>, <0x0 0xfdc48740 0x0 0x40>;
+		interrupts = <GIC_SPI 98 IRQ_TYPE_LEVEL_HIGH 0>;
+		interrupt-names = "irq_rkvdec1_mmu";
+		clocks = <&cru ACLK_RKVDEC1>, <&cru HCLK_RKVDEC1>;
+		clock-names = "aclk", "iface";
+		rockchip,disable-mmu-reset;
+		#iommu-cells = <0>;
+		power-domains = <&power RK3588_PD_RKVDEC1>;
+		status = "okay";
+	};
+
+	/* ---- AV1 硬解（8K AV1 decoder 核）—— 当前禁用 ----
+	 * 可行部分：节点写对后 rk_vcodec.ko 能 probe（dmesg 会出
+	 * "rk_iommu fdca0000.iommu: av1d iommu enabled"、
+	 * "mpp_av1dec fdc70000.av1d: probing start/finish"，
+	 * /proc/mpp_service/supports-device 会多出 DEVICE[4]:AV1DEC）。
+	 * 不可行部分：fnOS 6.18 内核对 AV1D 的 dma-buf 映射会失败：
+	 *   mpp_dma_import_fd: dma_buf_map_attachment ... failed(-22)
+	 *   rk_vcodec: mpp_process_request: can not import fd
+	 *   mpp_av1dec: no memory region mapped
+	 * kprobe 显示 av1_iommu_map/iommu_map_sg 返回 -EADDRINUSE(-98)：
+	 * dma-iommu 复用 IOVA 时 AV1D 硬件页表里仍有旧 PTE（页表在所有
+	 * domain 间共用、unmap 未清干净），是内核侧合并 av1d iommu 的问题，
+	 * 只改 DT 修不了；去掉 iommus 直通物理地址又会任务超时。
+	 * 因此这里保持厂商 BSP 默认的 disabled：AV1 解码在 fnOS 上暂不可用，
+	 * 等内核侧修复后再把两个 status 改回 okay 即可（节点本身是对的）。
+	 */
+	av1d_vpu: av1d@fdc70000 {
+		compatible = "rockchip,av1-decoder";
+		reg = <0x0 0xfdc70000 0x0 0x800>, <0x0 0xfdc80000 0x0 0x400>,
+		      <0x0 0xfdc90000 0x0 0x400>;
+		reg-names = "vcd", "cache", "afbc";
+		interrupts = <GIC_SPI 108 IRQ_TYPE_LEVEL_HIGH 0>,
+			     <GIC_SPI 107 IRQ_TYPE_LEVEL_HIGH 0>,
+			     <GIC_SPI 106 IRQ_TYPE_LEVEL_HIGH 0>;
+		interrupt-names = "irq_av1d", "irq_cache", "irq_afbc";
+		clocks = <&cru ACLK_AV1>, <&cru PCLK_AV1>;
+		clock-names = "aclk_vcodec", "hclk_vcodec";
+		rockchip,normal-rates = <400000000>, <400000000>;
+		assigned-clocks = <&cru ACLK_AV1>, <&cru PCLK_AV1>;
+		assigned-clock-rates = <400000000>, <400000000>;
+		resets = <&cru SRST_A_AV1>, <&cru SRST_P_AV1>;
+		reset-names = "video_a", "video_h";
+		rockchip,skip-pmu-idle-request;
+		iommus = <&av1d_mmu>;
+		rockchip,srv = <&mpp_srv>;
+		rockchip,taskqueue-node = <11>;
+		power-domains = <&power RK3588_PD_AV1>;
+		status = "disabled";
+	};
+
+	av1d_mmu: iommu@fdca0000 {
+		compatible = "rockchip,iommu-av1d";
+		reg = <0x0 0xfdca0000 0x0 0x600>;
+		interrupts = <GIC_SPI 109 IRQ_TYPE_LEVEL_HIGH 0>;
+		interrupt-names = "irq_av1d_mmu";
+		clocks = <&cru ACLK_AV1>, <&cru PCLK_AV1>;
+		clock-names = "aclk", "iface";
+		#iommu-cells = <0>;
+		power-domains = <&power RK3588_PD_AV1>;
+		status = "disabled";
+	};
+};
+
+/* RKVDEC 的 RCB（行缓冲）必须落在 SoC SRAM 上；厂商 dtsi 在
+ * sram@ff001000 下切了两个分区（mainline 的 system_sram2 没有子节点，补上）。
+ * MPP 驱动只要子节点的 reg 区间（经父节点 ranges 转成 0xff001000 + off）。
+ */
+&system_sram2 {
+	rkvdec0_sram: rkvdec-sram@0 {
+		reg = <0x0 0x78000>;
+	};
+
+	rkvdec1_sram: rkvdec-sram@78000 {
+		reg = <0x78000 0x77000>;
 	};
 };
