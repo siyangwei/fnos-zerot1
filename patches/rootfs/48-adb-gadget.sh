@@ -69,8 +69,16 @@ do_start() {
     echo 0x0200 > "$G/bcdUSB"
     echo 0x0100 > "$G/bcdDevice"
     mkdir -p "$G/strings/0x409"
-    SERIAL="$(cat /proc/cpuinfo | grep -m1 Serial | awk '{print $3}')"
-    [ -n "${SERIAL:-}" ] || SERIAL=0123456789ABCDEF
+    # 序列号：优先 SoC eFuse（device-tree serial-number，本板 = 8e7aa4e0e4859430，与 Android 侧 adb 一致），
+    # 其次 /proc/cpuinfo 的 Serial（注意很多 RK3588 板这里是 0000000000000000），最后厂商默认值。
+    SERIAL="$(cat /proc/device-tree/serial-number 2>/dev/null | tr -d '\000\n')"
+    SERIAL="$(printf '%s' "$SERIAL" | tr -d '\r\n')"
+    if [ -z "$SERIAL" ] || [ "$SERIAL" = "0000000000000000" ]; then
+        SERIAL="$(awk -F': ' '/^Serial/{print $2; exit}' /proc/cpuinfo 2>/dev/null)"
+    fi
+    if [ -z "$SERIAL" ] || [ "$SERIAL" = "0000000000000000" ]; then
+        SERIAL="${ZT1_ADB_SERIAL:-0123456789ABCDEF}"
+    fi
     echo "$SERIAL"        > "$G/strings/0x409/serialnumber"
     echo "shimeta"        > "$G/strings/0x409/manufacturer"
     echo "zeroT1 fnOS"    > "$G/strings/0x409/product"
