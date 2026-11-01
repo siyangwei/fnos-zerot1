@@ -4,7 +4,7 @@
 # 需求（用户 m23865）：HDMI 未插入时 eDP 为主屏；HDMI 插入时 HDMI 为主屏、eDP 为副屏。
 # 实现：
 #   - /usr/local/bin/zt1-display-primary.sh：轮询 DRM 的 HDMI 热插拔状态，用 xrandr 应用布局；
-#   - zt1-display-primary.service（systemd，User=zero，After=lightdm）常驻；
+#   - zt1-display-primary.service（systemd，以 root 运行，After=lightdm）常驻；
 #   - 布局：HDMI --auto（EDID 首选/最高分辨率，默认 2560x1440）+ primary，eDP 原生
 #     1920x1080 放在 HDMI 正下方（rockchipdrm 最大画布 4096x4096，2560+1920 横向放不下，
 #     纵向排列可以不缩放、两屏都清晰）。
@@ -70,7 +70,8 @@ Wants=lightdm.service
 
 [Service]
 Type=simple
-User=zero
+# 注意：必须以 root 运行——首次开机向导会删除预置用户、管理员用户名由用户自选，
+# 写死 User=zero 在全新镜像上会启动失败；root 用 lightdm 的 XAUTHORITY 同样能操作 :0。
 Environment=DISPLAY=:0
 Environment=XAUTHORITY=/var/run/lightdm/root/:0
 ExecStart=/usr/local/bin/zt1-display-primary.sh
