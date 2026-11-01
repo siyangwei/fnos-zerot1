@@ -1,0 +1,92 @@
+diff --git a/arch/arm/mach-rockchip/board.c b/arch/arm/mach-rockchip/board.c
+index 0b9e585..123093f 100644
+--- a/arch/arm/mach-rockchip/board.c
++++ b/arch/arm/mach-rockchip/board.c
+@@ -530,6 +530,17 @@ int board_late_init(void)
+ #ifdef CONFIG_AMP
+ 	amp_cpus_on();
+ #endif
++	/* ZT1: direct boot (avoid armbian boot.scr / distro_bootcmd USB crash) */
++	env_set("bootargs",
++		"root=UUID=357e9eb7-73ea-4367-b981-6296a97687e0 rootwait rw "
++		"rootfstype=btrfs rootflags=compress=zstd:1 "
++		"console=ttyS2,1500000n8 console=tty0 quiet loglevel=3 "
++		"net.ifnames=0 max_loop=128");
++	env_set("bootcmd",
++		"load mmc 0:4 ${kernel_addr_r} /Image; "
++		"load mmc 0:4 ${ramdisk_addr_r} /uInitrd; "
++		"load mmc 0:4 ${fdt_addr_r} /dtb/rockchip/rk3588-aiot3588a.dtb; "
++		"booti ${kernel_addr_r} ${ramdisk_addr_r} ${fdt_addr_r}");
+ 	return rk_board_late_init();
+ }
+ 
+@@ -742,8 +753,12 @@ int board_initr_caches_fixup(void)
+ 	return 0;
+ }
+ 
++int zt1_set_cpll_1500(void);
++
+ void arch_preboot_os(uint32_t bootm_state, bootm_headers_t *images)
+ {
++	zt1_set_cpll_1500();
++
+ 	if (!(bootm_state & BOOTM_STATE_OS_PREP))
+ 		return;
+ 
+diff --git a/configs/nanopi6_defconfig b/configs/nanopi6_defconfig
+index 0007757..724b1cf 100644
+--- a/configs/nanopi6_defconfig
++++ b/configs/nanopi6_defconfig
+@@ -232,3 +232,4 @@ CONFIG_RK_AVB_LIBAVB_USER=y
+ CONFIG_OPTEE_CLIENT=y
+ CONFIG_OPTEE_V2=y
+ CONFIG_OPTEE_ALWAYS_USE_SECURITY_PARTITION=y
++CONFIG_FS_EXT4=y
+diff --git a/drivers/clk/rockchip/clk_rk3588.c b/drivers/clk/rockchip/clk_rk3588.c
+index 37a6617..ec83077 100644
+--- a/drivers/clk/rockchip/clk_rk3588.c
++++ b/drivers/clk/rockchip/clk_rk3588.c
+@@ -2095,6 +2095,34 @@ static void rk3588_clk_init(struct rk3588_clk_priv *priv)
+ 		     (ACLK_TOP_S200_SEL_200M << ACLK_TOP_S200_SEL_SHIFT));
+ }
+ 
++
++int zt1_set_cpll_1500(void)
++{
++	struct udevice *dev;
++	struct rk3588_clk_priv *priv;
++	ofnode node;
++	int ret;
++
++	node = ofnode_path("/clock-controller@fd7c0000");
++	if (!ofnode_valid(node))
++		return -ENODEV;
++	if (uclass_get_device_by_ofnode(UCLASS_CLK, node, &dev))
++		return -ENODEV;
++	priv = dev_get_priv(dev);
++	if (!priv)
++		return -ENODEV;
++	ret = rockchip_pll_set_rate(&rk3588_pll_clks[CPLL], priv->cru,
++				    CPLL, CPLL_HZ);
++	printf("ZT1PB: cpll set ret=%d\n", ret);
++	if (!ret)
++		priv->cpll_hz = CPLL_HZ;
++	rk_clrsetreg(&priv->cru->clksel_con[83], 0x7f00 | (1 << 15),
++		     (11 << 8) | (1 << 15));
++	printf("ZT1PB: con83=%08x cpll=%lu\n",
++	       readl(&priv->cru->clksel_con[83]), priv->cpll_hz);
++	return ret;
++}
++
+ static int rk3588_clk_probe(struct udevice *dev)
+ {
+ 	struct rk3588_clk_priv *priv = dev_get_priv(dev);
+diff --git a/fs/ext4/Kconfig b/fs/ext4/Kconfig
+index e69de29..7e262b2 100644
+--- a/fs/ext4/Kconfig
++++ b/fs/ext4/Kconfig
+@@ -0,0 +1,4 @@
++config FS_EXT4
++	bool "EXT4 filesystem support"
++	help
++	  This provides support for the EXT4 filesystem in U-Boot.
