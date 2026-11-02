@@ -93,13 +93,38 @@ jobs:
           sudo chown -R "$(id -u):$(id -g)" work output || true
           ls -lh output/
 
+      - name: 生成校验文件并压缩镜像
+        run: |
+          set -euo pipefail
+          img=$(ls output/*.img | head -1)
+          base=$(basename "$img")
+          log() { echo "::group::[pack] $*"; }
+
+          # 1) 原始镜像的校验和（解压后用它验镜像本体）
+          ( cd output && sha256sum "$base" > SHA256SUMS )
+          echo "镜像 sha256:"; cat output/SHA256SUMS
+
+          # 2) zstd 压缩（多线程 + 长窗口；比 upload-artifact 的 zip 小得多）
+          log "zstd 压缩 $base"
+          zstd -T0 -19 --long=27 -f "$img" -o "output/$base.zst"
+          ( cd output && sha256sum "$base.zst" > "$base.zst.sha256" )
+
+          echo "压缩完成："
+          ls -lh output
+          echo "::endgroup::"
+
       - name: 上传 artifact
         uses: actions/upload-artifact@v4
         with:
           name: fnos-aiot3588a-update
-          path: output/*.img
+          path: |
+            output/*.img.zst
+            output/*.img.zst.sha256
+            output/SHA256SUMS
           if-no-files-found: error
+          # 已经是 zstd 压缩过的文件，artifact 层不再二次压缩
           compression-level: 0
+          retention-days: 14
 
       - name: 发布 Release（仅 v* 标签）
         if: startsWith(github.ref, 'refs/tags/v')
@@ -108,9 +133,21 @@ jobs:
         run: |
           set -euo pipefail
           img=$(ls output/*.img | head -1)
-          cp "$img" fnos-aiot3588a-update.img
-          sha256sum fnos-aiot3588a-update.img | tee SHA256SUMS
-          gh release create "$GITHUB_REF_NAME" fnos-aiot3588a-update.img SHA256SUMS \
+          base=$(basename "$img")
+          zst="output/$base.zst"
+          [ -f "$zst" ] || { echo "缺少 $zst"; exit 1; }
+          {
+            echo "构建于 $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo
+            echo "## 下载与烧录"
+            echo '```bash'
+            echo "unzstd $base.zst                     # 得到 $base"
+            echo "sha256sum -c SHA256SUMS              # 校验镜像"
+            echo "sudo upgrade_tool_2.45 uf $base      # 一条命令烧录"
+            echo '```'
+          } > RELEASE_NOTES.md
+          gh release create "$GITHUB_REF_NAME" \
+            "$zst" "output/$base.zst.sha256" "output/SHA256SUMS" \
             --title "fnOS for AIOT-3588A $GITHUB_REF_NAME" \
-            --notes "构建于 $(date -u +%Y-%m-%dT%H:%M:%SZ)，烧录：sudo upgrade_tool_2.45 uf fnos-aiot3588a-update.img" \
+            --notes-file RELEASE_NOTES.md \
             --verify-tag

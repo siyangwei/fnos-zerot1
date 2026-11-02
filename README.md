@@ -60,9 +60,12 @@ output/fnos-aiot3588a-update-<日期>.img   （RKFW，upgrade_tool uf 烧录）
 
 ### 已知问题
 
-- **AV1 硬解不可用**：fnOS 预编译内核的 av1d IOMMU 适配有缺陷（`iommu_map_nosync` 对同一 iova 重复
-  调用 `av1_iommu_map`，第二次返回 `-EADDRINUSE`，PTE 不回滚），启用 DT 节点后设备能注册但解码失败；
-  纯设备树/CMA 层面无法修复。AV1 可走 `libdav1d` 软解（ffmpeg 默认）。
+- **AV1 只有硬解不可用（软解正常）**：fnOS 预编译内核的 av1d IOMMU 适配有缺陷（`iommu_map_nosync` 对同一
+  iova 重复调用 `av1_iommu_map`，第二次返回 `-EADDRINUSE`，PTE 不回滚），启用 DT 节点后设备能注册但解码失败；
+  纯设备树/CMA 层面无法修复，故 DT 里保持 `av1d@fdc70000` / `iommu@fdca0000` 的 `status = "disabled"`
+  （**与 fnOS 官方默认一致**，非"砍功能"）。AV1 **软解照常可用**：ffmpeg 默认就走 `libdav1d`
+  （`ffmpeg -i x.av1.mkv -f null -` → `Stream #0:0 -> #0:0 (av1 (libdav1d))`），另保留 AOM native `av1` 解码器；
+  `av1_rkmpp` 解码器仍在列表里，但没有设备时调用会报 `mpp: error found on mpp initialization`，不可用。
 - **HEVC 硬编**打开失败（`-22`），H.264/MJPEG 硬编正常。
 - HDMI 的 2K240 等高刷模式需要 FRL，本内核/固件未启用，会被拒绝；4K60 及以下（TMDS 范围）正常。
 - HDMI1 必须接在 VOP **VP2** 上（设备树已固定），否则与 eDP 同时启用时黑屏。
@@ -159,9 +162,22 @@ sudo env SKIP_ROOTFS=1 SKIP_BOOT=1 SKIP_DTS=1 ./scripts/build-all.sh
 `.github/workflows/build.yml`：
 
 - 手动触发（Actions → Build image → Run workflow），或推送 `v*` 标签自动创建 Release；
-- 全程在 Ubuntu runner 上完成：下载底稿/内核/源码 → 构建 → 上传 `update.img` 为 artifact（tag 时发 Release）；
+- 全程在 Ubuntu runner 上完成：下载底稿/内核/源码 → 构建 → **zstd 压缩** → 上传 artifact（tag 时发 Release）；
+- 产物有两个文件（约 1.5~1.8GB 压缩包，比原始 6.1GB 小很多）：
+  - `fnos-aiot3588a-update-<日期>.img.zst` —— 压缩后的整盘镜像
+  - `fnos-aiot3588a-update-<日期>.img.zst.sha256` —— 压缩包自身的校验和（下载后先验）
+  - `SHA256SUMS` —— 解压后镜像本体的校验和
+- 下载后：
+
+  ```bash
+  sha256sum -c fnos-aiot3588a-update-*.img.zst.sha256   # 校验压缩包
+  unzstd fnos-aiot3588a-update-*.img.zst                # 解压得到 .img
+  sha256sum -c SHA256SUMS                               # 校验镜像本体
+  sudo upgrade_tool_2.45 uf fnos-aiot3588a-update-*.img # 烧录
+  ```
+
 - WiFi 密码、root 密码通过 **Actions Secrets**（`WIFI_SSID` / `WIFI_PASSWORD` /
-  `WIFI_FALLBACK_SSID` / `WIFI_FALLBACK_PASSWORD` / `ROOT_PASSWORD`）注入，仓库里不存明文。
+  `WIFI_FALLBACK_SSID` / `WIFI_FALLBACK_PASSWORD` / `ROOT_PASSWORD` / `USB_ROLE`）注入，仓库里不存明文。
 
 ---
 

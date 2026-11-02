@@ -157,7 +157,24 @@ sudo upgrade_tool_2.45 rd
 | Web 注册报 `E_DATABASE_ERROR` | rootfs 属主被污染 → 重跑 `normalize-ownership.sh` 后重打镜像 |
 | adb 只有 USB2 速度 | `patches/rootfs/48-adb-gadget.sh` 的 shim 没装上，或 `max_speed` 不是 `super-speed` |
 
-## 7. 相关文档
+## 7. GitHub Actions 产物
+
+`build.yml` 构建完成后会把镜像做 zstd 压缩再上传（原始 6.1GB → 约 1.5~1.8GB）：
+
+- `fnos-aiot3588a-update-<日期>.img.zst`：整盘镜像
+- `fnos-aiot3588a-update-<日期>.img.zst.sha256`：压缩包校验和（下载后先验）
+- `SHA256SUMS`：解压后镜像本体的校验和
+
+```bash
+sha256sum -c fnos-aiot3588a-update-*.img.zst.sha256
+unzstd fnos-aiot3588a-update-*.img.zst
+sha256sum -c SHA256SUMS
+sudo upgrade_tool_2.45 uf fnos-aiot3588a-update-*.img
+```
+
+推 `v*` 标签时这三个文件会直接挂到 GitHub Release 上。
+
+## 8. 相关文档
 
 - [UBOOT.md](UBOOT.md) —— 定制 u-boot 的源码改动与重编方法
 - [AUDIO.md](AUDIO.md) —— ES8388 音频拓扑与 MCLK 门控
