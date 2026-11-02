@@ -1,8 +1,10 @@
 # 构建产物
 /work/
 /output/
-*.img
-*.img.gz
+# 产物镜像只在 output/work 下；assets/uboot.img（4MB，定制 u-boot）必须入库
+/output/*.img
+/work/**/*.img
+/work/**/*.img.gz
 
 # 大型源码树 / 中间产物（构建时自动下载或生成，不入库）
 /kernel-rockchip/
