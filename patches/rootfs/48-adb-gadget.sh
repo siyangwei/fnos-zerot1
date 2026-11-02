@@ -19,6 +19,8 @@
 #      （只建 ffs.adb 一个功能，不碰 UMS/MTP/RNDIS，避免依赖一堆 function 模块）
 #   3) adbd.service（Type=oneshot + RemainAfterExit）开机拉起
 #   4) modules-load.d 加 libcomposite / usb_f_fs
+#   5) 装 libadbd_ss_shim.so（LD_PRELOAD 补 FunctionFS v2 SuperSpeed 描述符）
+#      => 主机侧按 USB 3.0（5Gbps / bcdUSB 0x0320）枚举，2026-11-02 实测通过
 #
 # 用法: 48-adb-gadget.sh <rootfs-dir>
 set -euo pipefail
@@ -34,6 +36,22 @@ if [ ! -f "$ADBD" ]; then die "缺少 $ADBD（应来自厂商 Ubuntu 镜像 /usr
 # ---------- 1) adbd 二进制 ----------
 install -m 0755 "$ADBD" "$ROOTFS/usr/bin/adbd"
 log "[48-adb] /usr/bin/adbd 已安装"
+
+# ---------- 1b) adbd SuperSpeed 描述符 shim ----------
+# 厂商 adbd 是 android-tools 4.2.2（Android 4.2 时代）编译出来的，只会给 FunctionFS
+# 写 v1 描述符（FS+HS），没有 SuperSpeed 描述符集合 => composite 在 SS 下 c->superspeed=0
+# => bNumConfigurations=0 => 主机报 "no configurations, error -22"，只能退到 USB2（480M）。
+# 这里装一个 LD_PRELOAD 小 shim（源码 tools/adbd-ss-shim/adbd_ss_shim.c，板上 gcc 编译）：
+# 拦截 adbd 对 ep0 的 write()，把 v1 描述符块改写成 v2（magic=3, flags=FS|HS|SS，
+# 附带 fs_count/hs_count/ss_count 三个计数字段），SS 段 = 接口描述符 + 每个端点
+# （wMaxPacketSize=1024 的 SS 端点描述符 + 端点伴随描述符）。改完主机就能按 USB3.0 枚举。
+SHIM="$PROJECT_DIR/assets/adbd-ss-shim/libadbd_ss_shim.so"
+if [ -f "$SHIM" ]; then
+    install -D -m 0644 "$SHIM" "$ROOTFS/usr/local/lib/libadbd_ss_shim.so"
+    log "[48-adb] libadbd_ss_shim.so 已安装（adbd USB3 SuperSpeed 描述符 shim）"
+else
+    warn "[48-adb] 缺少 $SHIM，adb 只能跑 USB2 high-speed"
+fi
 
 # ---------- 2) gadget 脚本 ----------
 mkdir -p "$ROOTFS/usr/local/sbin"
@@ -94,15 +112,17 @@ do_start() {
     # adbd 先起来并等它把 functionfs 的端点/描述符准备好（ready=1），再绑 UDC；
     # 否则 host 拿到的是一个没有 configuration 的坏设备（no configurations, error -22）
     start-stop-daemon --stop --quiet --exec /usr/bin/adbd 2>/dev/null
-    start-stop-daemon --start --quiet --background --exec /usr/bin/adbd
+    # 用 LD_PRELOAD 加载 SS 描述符 shim（厂商 adbd 4.2.2 只写 v1 描述符，没有 USB3 SuperSpeed 集合）
+    LD_PRELOAD=/usr/local/lib/libadbd_ss_shim.so \
+        start-stop-daemon --start --quiet --background --exec /usr/bin/adbd
     for i in $(seq 1 100); do
         [ "$(cat "$G/functions/ffs.adb/ready" 2>/dev/null)" = "1" ] && break
         sleep 0.1
     done
 
-    # fnOS 内核 composite 在 SuperSpeed 下只统计 c->superspeed（ffs.adb 无 SS 描述符 ⇒ 计数 0 ⇒
-    # host 报 "no configurations, error -22"），因此把 gadget 限制在 HighSpeed 才能枚举
-    if [ -w "$G/max_speed" ]; then echo high-speed > "$G/max_speed" 2>/dev/null || true; fi
+    # USB3.0 SuperSpeed：ffs.adb 的 SS 描述符由 LD_PRELOAD shim 补出来（见上），
+    # composite 在 SS 下能统计到 configuration，主机按 USB3 枚举（bcdUSB 自动 0x0300+）
+    if [ -w "$G/max_speed" ]; then echo super-speed > "$G/max_speed" 2>/dev/null || true; fi
 
     UDC="$(ls /sys/class/udc 2>/dev/null | head -1)"
     if [ -z "${UDC:-}" ]; then log "ERROR: 没有 UDC（检查 Type-C 是否插到主机）"; return 1; fi
