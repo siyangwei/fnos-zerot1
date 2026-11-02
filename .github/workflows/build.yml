@@ -38,7 +38,7 @@ jobs:
       WIFI_FALLBACK_SSID: ${{ secrets.WIFI_FALLBACK_SSID }}
       WIFI_FALLBACK_PASSWORD: ${{ secrets.WIFI_FALLBACK_PASSWORD }}
       ROOT_PASSWORD: ${{ secrets.ROOT_PASSWORD }}
-      USB_ROLE: host
+      USB_ROLE: ${{ secrets.USB_ROLE }}
     steps:
       - name: 检出仓库
         uses: actions/checkout@v4
