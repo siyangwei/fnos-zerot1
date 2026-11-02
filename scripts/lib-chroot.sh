@@ -45,11 +45,22 @@ chroot_mount() {
     fi
     mountpoint -q "$rootfs/dev/pts"  || mount -t devpts devpts "$rootfs/dev/pts"
 
+    # DNS：镜像里的 /etc/resolv.conf 通常指向 systemd-resolved 的 127.0.0.53，
+    # chroot 里没有 resolved，apt 会解析失败 ⇒ 构建时临时换成宿主的 resolv.conf。
+    if [ -f /etc/resolv.conf ] && [ ! -f "$rootfs/etc/resolv.conf.orig" ]; then
+        cp -p "$rootfs/etc/resolv.conf" "$rootfs/etc/resolv.conf.orig" 2>/dev/null || true
+        cp -f /etc/resolv.conf "$rootfs/etc/resolv.conf"
+    fi
+
     echo "[chroot] mounted $rootfs"
 }
 
 chroot_umount() {
     local rootfs="$1"
+    # 还原构建前的 resolv.conf（避免把构建机的 DNS 写进镜像）
+    if [ -f "$rootfs/etc/resolv.conf.orig" ]; then
+        mv -f "$rootfs/etc/resolv.conf.orig" "$rootfs/etc/resolv.conf" 2>/dev/null || true
+    fi
     # 用 -R 递归卸载（先子后父）；不要用 -l（lazy umount 会留下子挂载，
     # systemd 之后处理这些残留 mount unit 时又可能触发传播问题）
     umount -R "$rootfs/dev" 2>/dev/null || true
