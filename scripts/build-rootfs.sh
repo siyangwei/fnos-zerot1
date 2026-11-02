@@ -2,7 +2,8 @@
 # build-rootfs.sh —— 准备 fnOS rootfs：下载底稿镜像 → 解压 → 提取根分区 → 打补丁
 #
 # 底稿：ophub/fnnas 的 fnnas_rockchip_nanopc-t6_k6.18.18_*.img.gz
-#   只用它的 rootfs（Debian 12 + 飞牛 fnOS 服务）；内核/uboot 全部换成友善构建的。
+#   只用它的 rootfs（Debian 12 + 飞牛 fnOS 服务）；boot 分区换成 fnOS 官方内核
+#   + 本仓库的板级 dtb + 定制 u-boot（见 docs/BUILD.md）。
 #   ROOTFS 分区位于 GPT 第 2 分区（LBA 1081344，offset = 1081344*512）。
 #
 # 用法：sudo ./scripts/build-rootfs.sh

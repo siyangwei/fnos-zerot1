@@ -20,9 +20,10 @@ set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 source "$HERE/lib-common.sh"
 
-ROOTFS="${1:-${ROOTFS:-$WORK_DIR/rootfs-official}}"
-BASE_IMG="${BASE_IMG:-$WORK_DIR/official-base.img}"
-BASE_MNT="${BASE_MNT:-/mnt/zt1-base-root}"
+ROOTFS="${1:-${ROOTFS:-$WORK_DIR/rootfs}}"
+# 参照镜像：优先 BASE_IMG；否则用 build-rootfs.sh 下载的 fnOS 底稿镜像
+BASE_IMG="${BASE_IMG:-${FNOS_IMG:-$WORK_DIR/official-base.img}}"
+BASE_MNT="${BASE_MNT:-$WORK_DIR/mnt-base-root}"
 
 need_root
 

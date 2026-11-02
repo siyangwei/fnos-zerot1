@@ -2,7 +2,7 @@
 
 本镜像的 `assets/uboot.img` 不是友善原版，而是从
 `https://github.com/friendlyarm/uboot-rockchip` 分支 `nanopi6-v2017.09`
-（`/home/zero/work/uboot-fa`）打补丁后重编的版本，解决了**千兆网口 99MHz** 问题。
+打补丁后重编的版本，解决了**千兆网口 99MHz** 问题。
 
 ## 为什么必须改 u-boot
 
@@ -26,14 +26,28 @@
 
 ## 重编步骤
 
+需要一个可用的 Rockchip u-boot 构建环境（友善 `uboot-rockchip` 的 `nanopi6-v2017.09` 分支，
+自带交叉工具链与 rkbin）：
+
 ```bash
-cd /home/zero/work/uboot-fa
-ln -sfn ../rk35xx-android14/prebuilts prebuilts
-ln -sfn ../rk35xx-android14/rkbin rkbin
-git apply /home/zero/work/fnos-zerot1/patches/uboot/0001-zt1-uboot-cpll-ext4-directboot.patch
-./make.sh nanopi6                       # 产出 uboot.img 4,194,304B
-cp uboot.img /home/zero/work/fnos-zerot1/assets/uboot.img
+# 1. 取友善 u-boot 源码（选择 nanopi6-v2017.09 分支）
+git clone -b nanopi6-v2017.09 https://github.com/friendlyarm/uboot-rockchip uboot-rockchip
+cd uboot-rockchip
+ln -sfn ../prebuilts prebuilts    # 友善 SDK 里的交叉工具链（或改 make.sh 里的 CROSS_COMPILE）
+ln -sfn ../rkbin rkbin
+
+# 2. 打本项目补丁
+git apply /path/to/fnos-zerot1/patches/uboot/0001-zt1-uboot-cpll-ext4-directboot.patch
+
+# 3. 编译（产出 uboot.img 4,194,304 字节）
+./make.sh nanopi6
+
+# 4. 替换仓库里的预编译产物
+cp uboot.img /path/to/fnos-zerot1/assets/uboot.img
 ```
+
+仓库里已带编好的 `assets/uboot.img`（md5 `0113d1d47e126772abbce148bc8500f7`），
+日常构建不需要重编 u-boot。
 
 ## 验证
 
@@ -46,7 +60,7 @@ cp uboot.img /home/zero/work/fnos-zerot1/assets/uboot.img
 实验失败时用 MaskROM 只回写 uboot 分区：
 
 ```bash
-cd /home/zero/work/fnos-zerot1
+cd /path/to/fnos-zerot1
 sudo upgrade_tool_2.45 db assets/MiniLoaderAll.bin
 sudo upgrade_tool_2.45 wl 0x4000 <uboot.img>
 sudo upgrade_tool_2.45 rd

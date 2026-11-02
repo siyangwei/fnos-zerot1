@@ -2,12 +2,22 @@
 # pack-image.sh —— 组装各分区镜像 + 用 Rockchip 工具打包出 update.img
 #
 # 分区布局（与 parameter.txt 一致，单位=512B 扇区）：
-#   uboot    0x004000 .. +0x2000   (4MB)
-#   misc     0x006000 .. +0x2000   (4MB)
-#   resource 0x008000 .. +0x8000   (16MB)  -- 放 rk-kernel.dtb 给 u-boot 用
-#   boot     0x010000 .. +0x20000  (64MB, FAT32) -- Image + dtb + extlinux.conf
-#   rootfs   0x030000 .. +<按rootfs大小> (btrfs)
+#   uboot    0x004000 .. +0x2000   (4MB,   预编译 assets/uboot.img)
+#   misc     0x006000 .. +0x2000   (4MB,   全零，清 Android recovery 标记)
+#   resource 0x008000 .. +0x8000   (16MB,  rk-kernel.dtb，u-boot 早期读)
+#   boot     0x010000 .. +0x20000  (64MB,  ext4) -- Image + uInitrd + dtb/ + extlinux/
+#   rootfs   0x030000 .. +<按 rootfs 大小，64MB 对齐>  (btrfs)
 #   userdata 紧接 rootfs 之后，grow 到盘尾
+#
+# boot 分区与引导链路（重要）：
+#   定制的 u-boot（assets/uboot.img）在 board_late_init() 里写死直接引导：
+#     load mmc 0:4 ${kernel_addr_r}  /Image
+#     load mmc 0:4 ${ramdisk_addr_r} /uInitrd
+#     load mmc 0:4 ${fdt_addr_r}     /dtb/rockchip/rk3588-aiot3588a.dtb
+#     booti ...
+#   因此 boot 分区必须是 ext4（u-boot 里补了 FS_EXT4），且这三个文件名固定。
+#   内核 = fnOS 官方 6.18.18-trim（带 trimafs/zfs/rk_vcodec 等私有驱动，
+#   主线/友善内核都跑不了 fnOS 管理界面），由 scripts/prepare-boot.sh 准备。
 #
 # 用法：sudo ./scripts/pack-image.sh
 # 产物：output/fnos-aiot3588a-update-<日期>.img（RKFW 格式，upgrade_tool uf 烧录）
@@ -18,13 +28,10 @@ source "$HERE/lib-common.sh"
 
 need_root
 : "${ROOTFS:?}"
-if [ -n "${FNOS_BOOT:-}" ] && [ -f "$FNOS_BOOT/Image" ]; then
-    BOOT_MODE="fnos"
-else
-    BOOT_MODE="bsp"
-    [ -f "$IMAGE_DIR/Image" ] || die "缺少 $IMAGE_DIR/Image（先跑 build-kernel.sh，或设 FNOS_BOOT 指向 fnOS boot 目录）"
-fi
-[ -f "$IMAGE_DIR/dtb/rockchip/rk3588-aiot3588a.dtb" ] || die "缺少 dtb（先跑 build-dts.sh）"
+FNOS_BOOT="${FNOS_BOOT:-$WORK_DIR/boot-fnos}"
+[ -f "$FNOS_BOOT/Image" ]  || die "缺少 $FNOS_BOOT/Image（先跑 scripts/prepare-boot.sh）"
+[ -f "$FNOS_BOOT/uInitrd" ] || die "缺少 $FNOS_BOOT/uInitrd（先跑 scripts/prepare-boot.sh）"
+[ -f "$IMAGE_DIR/dtb/rockchip/rk3588-aiot3588a.dtb" ] || die "缺少 dtb（先跑 scripts/build-dts.sh）"
 
 UBOOT_START=0x4000;  UBOOT_SIZE=0x2000
 MISC_START=0x6000;   MISC_SIZE=0x2000
@@ -42,6 +49,13 @@ log "rootfs 计算：${ROOTFS_USED_MB}MB used → 分区 ${ROOTFS_MB}MB (${ROOTF
 log "userdata 起点：0x$(printf '%08x' $USERDATA_START)"
 
 UPDATE_DIR="$WORK_DIR/fnos-update"
+# 复用现成 rootfs.img 时，先把源文件挪到独立位置（UPDATE_DIR 会被清空重建）
+if [ -n "${ROOTFS_IMG_REUSE:-}" ] && [ -f "$ROOTFS_IMG_REUSE" ]; then
+    _reuse_src="$(readlink -f "$ROOTFS_IMG_REUSE")"
+    case "$_reuse_src" in
+        "$UPDATE_DIR"/*) cp -f "$_reuse_src" "$WORK_DIR/rootfs-reuse.img"; ROOTFS_IMG_REUSE="$WORK_DIR/rootfs-reuse.img" ;;
+    esac
+fi
 rm -rf "$UPDATE_DIR"
 mkdir -p "$UPDATE_DIR/images"
 
@@ -60,73 +74,48 @@ cp -f "$IMAGE_DIR/dtb/rockchip/rk3588-aiot3588a.dtb" "$UPDATE_DIR/res/rk-kernel.
 "$ASSETS_DIR/tools/resource_tool" --pack --root="$UPDATE_DIR/res" \
     --image="$UPDATE_DIR/resource.img" "$UPDATE_DIR/res/rk-kernel.dtb" >/dev/null
 
-# ---- 4. boot.img（FAT32）----
-# 两种布局：
-#   A) fnOS 官方内核布局（默认）：Image + uInitrd + dtb/ + armbianEnv.txt + boot.scr
-#      内核来自 ophub kernel_fnnas 的 boot-rockchip 包，boot.scr 由 fnOS 原版提供；
-#      BSP 内核缺少 fnOS 私有 trimafs，无法运行管理界面，故必须用官方内核。
-#   B) 友善 BSP 内核布局（备用）：Image + dtb/ + extlinux/extlinux.conf
-if [ -n "${FNOS_BOOT:-}" ] && [ -f "$FNOS_BOOT/Image" ]; then
-    log "生成 boot.img (fnOS 内核布局, ext4 ${BOOT_SIZE} 扇区)"
-    BOOT_SRC="$UPDATE_DIR/boot"
-    rm -rf "$BOOT_SRC"
-    mkdir -p "$BOOT_SRC"
-    cp -a "$FNOS_BOOT/." "$BOOT_SRC/"
-    # 确保 dtb 是我们板子的（含 Type-C device 变体，供 zt1-usb-role 切换）
-    mkdir -p "$BOOT_SRC/dtb/rockchip"
-    cp -f "$IMAGE_DIR/dtb/rockchip/rk3588-aiot3588a.dtb" "$BOOT_SRC/dtb/rockchip/"
-    if [ -f "$IMAGE_DIR/dtb/rockchip/rk3588-aiot3588a-usbdev.dtb" ]; then
-        cp -f "$IMAGE_DIR/dtb/rockchip/rk3588-aiot3588a-usbdev.dtb" "$BOOT_SRC/dtb/rockchip/"
-    fi
-    # 第二条引导路径：extlinux.conf（distro_bootcmd 扫完 boot.scr 后会试 sysboot）
-    mkdir -p "$BOOT_SRC/extlinux"
-    cat > "$BOOT_SRC/extlinux/extlinux.conf" <<'EOF'
+# ---- 4. boot.img（ext4，fnOS 官方内核布局）----
+log "生成 boot.img (ext4 ${BOOT_SIZE} 扇区)"
+BOOT_SRC="$UPDATE_DIR/boot"
+rm -rf "$BOOT_SRC"
+mkdir -p "$BOOT_SRC"
+cp -a "$FNOS_BOOT/." "$BOOT_SRC/"
+# 板级 dtb（含 Type-C device 变体）；u-boot 固定加载 rk3588-aiot3588a.dtb
+mkdir -p "$BOOT_SRC/dtb/rockchip"
+cp -f "$IMAGE_DIR/dtb/rockchip/rk3588-aiot3588a.dtb" "$BOOT_SRC/dtb/rockchip/"
+# Type-C 双 dtb：host 版另存一份 .host 母本，zt1-usb-role 用它回切
+cp -f "$BOOT_SRC/dtb/rockchip/rk3588-aiot3588a.dtb" "$BOOT_SRC/dtb/rockchip/rk3588-aiot3588a.dtb.host"
+if [ -f "$IMAGE_DIR/dtb/rockchip/rk3588-aiot3588a-usbdev.dtb" ]; then
+    cp -f "$IMAGE_DIR/dtb/rockchip/rk3588-aiot3588a-usbdev.dtb" "$BOOT_SRC/dtb/rockchip/"
+fi
+# extlinux.conf：宿主机手动引导（sysboot）时可用；定制 u-boot 默认走直接引导
+mkdir -p "$BOOT_SRC/extlinux"
+cat > "$BOOT_SRC/extlinux/extlinux.conf" <<'EOF'
 label fnos
     kernel /Image
     fdt /dtb/rockchip/rk3588-aiot3588a.dtb
     initrd /uInitrd
     append root=UUID=357e9eb7-73ea-4367-b981-6296a97687e0 rootwait rw rootfstype=btrfs rootflags=compress=zstd:1 console=ttyS2,1500000n8 console=tty0 quiet loglevel=3 systemd.show_status=0 net.ifnames=0 max_loop=128
 EOF
-    # USB_ROLE=device（默认）时用 Type-C device 变体 dtb：接 PC 即可 adb
-    if [ "${USB_ROLE:-device}" != "host" ] && [ -f "$BOOT_SRC/dtb/rockchip/rk3588-aiot3588a-usbdev.dtb" ]; then
-        sed -i "s#fdt /dtb/rockchip/rk3588-aiot3588a.dtb#fdt /dtb/rockchip/rk3588-aiot3588a-usbdev.dtb#" \
-            "$BOOT_SRC/extlinux/extlinux.conf"
-        log "USB_ROLE=${USB_ROLE:-device}：默认 dtb = rk3588-aiot3588a-usbdev.dtb（Type-C device）"
-    else
-        log "USB_ROLE=host：默认 dtb = rk3588-aiot3588a.dtb（Type-C host/otg）"
-    fi
-    USED_MB=$(( $(du -sm "$BOOT_SRC" | cut -f1) ))
-    log "boot 分区内容 ${USED_MB}MB / 分区 $(( BOOT_SIZE / 2048 ))MB"
-    [ "$USED_MB" -lt $(( BOOT_SIZE / 2048 - 6 )) ] || die "boot 分区空间不足（内容 ${USED_MB}MB）"
-    truncate -s $(( BOOT_SIZE * 512 )) "$UPDATE_DIR/boot.img"
-    # u-boot 2017.09 的 ext4 驱动不支持 64bit / metadata_csum 特性，必须关掉
-    mkfs.ext4 -q -F -L BOOT -O ^64bit,^metadata_csum -I 256 "$UPDATE_DIR/boot.img"
-    MNTB="$WORK_DIR/mnt-boot"
-    mkdir -p "$MNTB"
-    mount -o loop "$UPDATE_DIR/boot.img" "$MNTB"
-    cp -a "$BOOT_SRC/." "$MNTB/"
-    sync
-    umount "$MNTB"
-    rmdir "$MNTB"
-    log "boot.img 内容："; ls -lh "$BOOT_SRC" | head -8
-else
-    log "生成 boot.img (BSP 内核布局, FAT32 ${BOOT_SIZE} 扇区)"
-    BOOT_SRC="$UPDATE_DIR/boot"
-    mkdir -p "$BOOT_SRC/dtb/rockchip" "$BOOT_SRC/extlinux"
-    cp -f "$IMAGE_DIR/Image" "$BOOT_SRC/Image"
-    cp -f "$IMAGE_DIR/dtb/rockchip/rk3588-aiot3588a.dtb" "$BOOT_SRC/dtb/rockchip/"
-    cat > "$BOOT_SRC/extlinux/extlinux.conf" <<'EOF'
-label fnos
-    kernel /Image
-    fdt /dtb/rockchip/rk3588-aiot3588a.dtb
-    append root=/dev/mmcblk2p5 rootfstype=btrfs rootwait rw console=ttyS2,1500000n8 console=tty0 net.ifnames=0 max_loop=128 earlycon=uart8250,mmio32,0xfeb50000
-EOF
-    truncate -s $(( BOOT_SIZE * 512 )) "$UPDATE_DIR/boot.img"
-    mkfs.vfat -F 32 -n BOOT "$UPDATE_DIR/boot.img" >/dev/null
-    mcopy -s -i "$UPDATE_DIR/boot.img" "$BOOT_SRC/Image" ::/Image
-    mcopy -s -i "$UPDATE_DIR/boot.img" "$BOOT_SRC/dtb" ::/dtb
-    mcopy -s -i "$UPDATE_DIR/boot.img" "$BOOT_SRC/extlinux" ::/extlinux
-fi
+USED_MB=$(( $(du -sm "$BOOT_SRC" | cut -f1) ))
+log "boot 分区内容 ${USED_MB}MB / 分区 $(( BOOT_SIZE / 2048 ))MB"
+[ "$USED_MB" -lt $(( BOOT_SIZE / 2048 - 6 )) ] || die "boot 分区空间不足（内容 ${USED_MB}MB）"
+truncate -s $(( BOOT_SIZE * 512 )) "$UPDATE_DIR/boot.img"
+# u-boot 2017.09 的 ext4 驱动不支持 64bit / metadata_csum 特性，必须关掉；
+# 64MB 分区要装 32MB Image + 17MB uInitrd，再去掉日志（-O ^has_journal）、
+# 预留块（-m 0）和多余 inode 表（-N 1024），否则 cp 到一半 ENOSPC。
+mkfs.ext4 -q -F -L BOOT -O ^64bit,^metadata_csum,^has_journal -m 0 -N 1024 -I 256 "$UPDATE_DIR/boot.img"
+MNTB="$WORK_DIR/mnt-boot"
+mkdir -p "$MNTB"
+mount -o loop "$UPDATE_DIR/boot.img" "$MNTB"
+trap 'mountpoint -q "$MNTB" && umount "$MNTB" || true' EXIT
+df -h "$MNTB" | tail -1
+cp -a "$BOOT_SRC/." "$MNTB/"
+sync
+df -h "$MNTB" | tail -1
+umount "$MNTB"
+rmdir "$MNTB"
+log "boot.img 内容："; ls -lh "$BOOT_SRC" | head -8
 
 # ---- 4.9 属主归一（必须！见 scripts/normalize-ownership.sh 头注释）----
 # 历史坑：rootfs 树被污染成 uid 1000 后，postgres 数据目录不可读（web 注册报 4208 数据库读写错误）、
@@ -146,6 +135,7 @@ else
     MNT="$WORK_DIR/mnt-rootfs"
     mkdir -p "$MNT"
     mount -o loop,compress=zstd:1 "$ROOTFS_IMG" "$MNT"
+    trap 'mountpoint -q "$MNT" && umount "$MNT" || true' EXIT
     rsync -aHAX --numeric-ids "$ROOTFS/" "$MNT/"
     sync
     umount "$MNT"

@@ -82,8 +82,8 @@ clock/reset/power ID 和 mainline 能识别的 iommu compatible 写进来即可�
 ## 4. 编译 + 部署（主机上，不需要重编内核）
 
 ```bash
-cd /home/zero/work/fnos-zerot1
-KC=/home/zero/work/linux-6.18.18        # 完整 vanilla 6.18.18 源码，仅用于 cpp 预处理
+cd /path/to/fnos-zerot1
+KC=/path/to/linux-6.18.18        # 完整 vanilla 6.18.18 源码，仅用于 cpp 预处理（scripts/build-dts.sh 会下载）
 cpp -nostdinc -I$KC/include -I$KC/arch/arm64/boot/dts \
     -I$KC/arch/arm64/boot/dts/rockchip -I dts/mainline-6.18 \
     -undef -D__DTS__ -x assembler-with-cpp \
@@ -164,7 +164,7 @@ ffmpeg -f lavfi -i testsrc2=size=1920x1080:rate=30 -t 3 \
 ## 7. 回滚
 
 ```bash
-cd /home/zero/work/fnos-zerot1
+cd /path/to/fnos-zerot1
 git checkout -- dts/mainline-6.18/rk3588-aiot3588a.dts   # 撤销 DTS 改动
 # 重新编出旧 dtb 推回板上 /boot/dtb/rockchip/ 后重启；或直接刷旧镜像
 ```

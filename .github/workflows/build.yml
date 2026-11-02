@@ -1,116 +1,116 @@
-name: build-fnos-image
+name: Build image
 
-# 构建 fnOS(fnNAS) for Shimeta AIOT-3588A (RK3588)
+# 全自动构建 fnOS for AIOT-3588A 的 update.img
 #
-# 流程（见 docs/BUILD.md）：
-#   1) 下载 ophub 的 fnOS 底稿镜像（nanopc-t6, k6.18.18）→ 只取 rootfs（Debian12 + 飞牛服务）
-#   2) 用友善 u-boot + 友善 Linux 6.1.141 内核（打看门狗/板级 dts 补丁）重新组装
-#   3) 打 rootfs 补丁（fstab / WiFi-BT 固件 / adb / XFCE / watchdog）
-#   4) Rockchip 工具打 update.img（upgrade_tool uf 烧录）
+# 触发方式：
+#   1) Actions 页面手动 Run workflow（产物作为 artifact 下载）
+#   2) 推送 v* 标签（额外把 update.img 发到 Release）
 #
-# 预编译复用：assets/ 里的 MiniLoaderAll.bin、uboot.img（含 distro_bootcmd 补丁）、
-# 打包工具与 WiFi/BT 固件都已入库，日常构建不需要重新编译 u-boot，也不需要下载友善工具链。
+# 依赖的外部资源（全部公开、可缓存）：
+#   - ophub/fnnas 底稿镜像 fnnas_rockchip_1253（仅取 rootfs）
+#   - ophub/fnnas 官方内核包 kernel_fnnas/6.18.18-rockchip.tar.gz
+#   - kernel.org linux-6.18.18 源码（仅取编译 dts 需要的头文件）
+# u-boot 用仓库里预编译的 assets/uboot.img（源码补丁见 patches/uboot/，见 docs/UBOOT.md）。
+#
+# 密码类配置（WiFi/root）不要写进仓库：在仓库 Settings → Secrets 里配置同名变量，
+# 本工作流会把它们写进临时的 config.env（该文件已被 .gitignore 忽略）。
 
 on:
   workflow_dispatch:
-    inputs:
-      skip_xfce:
-        description: '跳过 XFCE 桌面（更快的构建，得到一个纯 NAS 系统）'
-        type: boolean
-        default: false
   push:
     tags:
       - 'v*'
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-24.04
-    timeout-minutes: 180
-
+    timeout-minutes: 150
+    env:
+      WIFI_SSID: ${{ secrets.WIFI_SSID }}
+      WIFI_PASSWORD: ${{ secrets.WIFI_PASSWORD }}
+      WIFI_FALLBACK_SSID: ${{ secrets.WIFI_FALLBACK_SSID }}
+      WIFI_FALLBACK_PASSWORD: ${{ secrets.WIFI_FALLBACK_PASSWORD }}
+      ROOT_PASSWORD: ${{ secrets.ROOT_PASSWORD }}
+      USB_ROLE: host
     steps:
-      - name: Checkout
+      - name: 检出仓库
         uses: actions/checkout@v4
 
-      - name: 清理磁盘（内核源码 + rootfs + 镜像需要 ~20GB）
+      - name: 释放磁盘空间
         run: |
+          df -h /
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
-                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
-          sudo apt-get clean
+                      /usr/local/share/boost /usr/local/share/chromium \
+                      "$AGENT_TOOLSDIRECTORY" || true
           df -h /
 
-      - name: 安装依赖
+      - name: 安装构建依赖
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            build-essential gcc-aarch64-linux-gnu \
-            qemu-user-static binfmt-support \
-            device-tree-compiler bc rsync git \
-            btrfs-progs dosfstools mtools \
-            gzip xz-utils curl
-          ls -l /usr/bin/qemu-aarch64-static
-          df -h /
+            rsync zstd cpio device-tree-compiler gcc \
+            e2fsprogs btrfs-progs fdisk parted \
+            qemu-user-static bzip2 xz-utils curl python3
 
-      - name: 读取 config.env（仓库根配置；同名 Secrets 优先）
-        env:
-          S_WIFI_SSID: ${{ secrets.WIFI_SSID }}
-          S_WIFI_PASSWORD: ${{ secrets.WIFI_PASSWORD }}
-          S_ROOT_PASSWORD: ${{ secrets.ROOT_PASSWORD }}
+      - name: 缓存下载的大文件（底稿镜像/内核包/内核源码）
+        uses: actions/cache@v4
+        with:
+          path: |
+            work/fnnas_base.img.gz
+            work/kernel-fnos/6.18.18-rockchip.tar.gz
+            work/linux-6.18.18.tar.xz
+          key: downloads-v1-${{ runner.os }}-${{ hashFiles('scripts/lib-common.sh', 'scripts/build-dts.sh', 'scripts/prepare-boot.sh') }}
+
+      - name: 生成 config.env
         run: |
-          # 仓库根的 config.env 是唯一配置入口：WiFi、root 密码、构建开关都从这里读。
-          # CI 上若配置了同名 Secrets 则优先（不必把密码写进公开仓库）。
-          set -a
-          [ -f config.env ] && . ./config.env
-          set +a
-
-          [ -n "${S_WIFI_SSID:-}" ] && echo "WIFI_SSID=$S_WIFI_SSID" >> "$GITHUB_ENV"
-          [ -n "${S_WIFI_PASSWORD:-}" ] && echo "WIFI_PASSWORD=$S_WIFI_PASSWORD" >> "$GITHUB_ENV"
-          [ -n "${S_ROOT_PASSWORD:-}" ] && echo "ROOT_PASSWORD=$S_ROOT_PASSWORD" >> "$GITHUB_ENV"
-
-          # config.env 里定义的所有变量都导出给后续步骤（sudo -E 会保留）
-          for k in $(grep -oE '^[A-Za-z_][A-Za-z0-9_]*' config.env 2>/dev/null | sort -u); do
-            v="${!k-}"
-            [ -n "$v" ] && echo "$k=$v" >> "$GITHUB_ENV"
-          done
-          echo "---- 生效配置（敏感值不打印）----"
-          for k in WIFI_SSID WIFI_FALLBACK_SSID WIFI_HIDDEN WIFI_COUNTRY ENABLE_WIFI ENABLE_SSH DEVICE_HOSTNAME SKIP_XFCE; do
-            echo "$k=${!k-<未设置>}"
-          done
+          cp config.env.example config.env
+          python3 - <<'PY'
+          import os, re
+          path = "config.env"
+          text = open(path).read()
+          for key in ("WIFI_SSID", "WIFI_PASSWORD", "WIFI_FALLBACK_SSID",
+                      "WIFI_FALLBACK_PASSWORD", "ROOT_PASSWORD", "USB_ROLE"):
+              val = os.environ.get(key, "")
+              if not val:
+                  continue
+              text = re.sub(rf'^{key}=.*$', f'{key}="{val}"', text, flags=re.M)
+          open(path, "w").write(text)
+          print("config.env 已生成（空值保持留空）")
+          PY
 
       - name: 构建 update.img
-        env:
-          SKIP_XFCE: ${{ inputs.skip_xfce && '1' || '0' }}
         run: |
-          if [ "$SKIP_XFCE" = "1" ]; then
-            mv patches/rootfs/40-xfce.sh /tmp/40-xfce.sh.disabled
-          fi
-          sudo -E ./scripts/build-all.sh
-          if [ "$SKIP_XFCE" = "1" ]; then
-            mv /tmp/40-xfce.sh.disabled patches/rootfs/40-xfce.sh
-          fi
-
-      - name: 产物信息
-        run: |
+          set -euo pipefail
+          sudo -E env WORK_DIR="$PWD/work" OUTPUT_DIR="$PWD/output" \
+               bash scripts/build-all.sh
+          sudo chown -R "$(id -u):$(id -g)" work output || true
           ls -lh output/
-          sha256sum output/*.img | tee output/SHA256SUMS
 
-      - name: 压缩（update.img ~5.8GB → gz ~1.8GB，便于上传）
-        run: gzip -1 -k output/*.img
-
-      - name: 上传构建产物（artifact）
+      - name: 上传 artifact
         uses: actions/upload-artifact@v4
         with:
           name: fnos-aiot3588a-update
-          path: |
-            output/*.img.gz
-            output/SHA256SUMS
+          path: output/*.img
+          if-no-files-found: error
           compression-level: 0
-          retention-days: 30
 
-      - name: 发布 Release（tag push 时）
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            output/*.img.gz
-            output/SHA256SUMS
-          generate_release_notes: true
+      - name: 发布 Release（仅 v* 标签）
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          img=$(ls output/*.img | head -1)
+          cp "$img" fnos-aiot3588a-update.img
+          sha256sum fnos-aiot3588a-update.img | tee SHA256SUMS
+          gh release create "$GITHUB_REF_NAME" fnos-aiot3588a-update.img SHA256SUMS \
+            --title "fnOS for AIOT-3588A $GITHUB_REF_NAME" \
+            --notes "构建于 $(date -u +%Y-%m-%dT%H:%M:%SZ)，烧录：sudo upgrade_tool_2.45 uf fnos-aiot3588a-update.img" \
+            --verify-tag

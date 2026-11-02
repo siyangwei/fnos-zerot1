@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""检查 ophub/fnnas 上游是否有更新的 rk3588 镜像 / 内核版本。
+"""检查 ophub/fnnas 上游是否有更新的底稿镜像 / 内核包。
 
-build-image.sh 里的 KERNEL_VER 必须与底稿镜像的内核版本严格一致，
-底稿镜像更新（内核版本变了）时这个脚本会提示需要同步的参数。
+脚本里的 FNOS_IMG_URL（scripts/lib-common.sh）与内核包 URL（scripts/prepare-boot.sh）
+都指向固定版本；上游更新时用本脚本对比，再决定是否升级版本号。
 
 用法:
     ./scripts/check-upstream.py           # 人类可读

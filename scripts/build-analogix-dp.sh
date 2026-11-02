@@ -14,7 +14,8 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 KERNEL_SRC="${KERNEL_SRC:-$ROOT/work/linux-6.18.18}"
 SRC_DIR="$ROOT/kernel-modules/analogix-dp-6.18.18"
 BUILD_DIR="${BUILD_DIR:-/tmp/adp-build}"
-CROSS="${CROSS_COMPILE:-/home/zero/work/rk35xx-android14/prebuilts/gcc/linux-x86/aarch64/gcc-arm-10.2-2020.11-x86_64-aarch64-none-linux-gnu/bin/aarch64-none-linux-gnu-}"
+# 交叉工具链：优先用环境变量 CROSS_COMPILE，其次常见的 aarch64 工具链前缀
+CROSS="${CROSS_COMPILE:-aarch64-linux-gnu-}"
 STRIP="${CROSS}strip"
 
 [ -d "$KERNEL_SRC" ] || { echo "缺少内核树: $KERNEL_SRC"; exit 1; }
