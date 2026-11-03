@@ -13,7 +13,8 @@
 #   并把软链切到新内核」这半件事，否则新内核缺少 eDP 修复（会黑屏/不显示）。
 #
 # 安全设计：
-#   - 默认 AUTOSYNC=0：只修空间与布局，内核保持在镜像内那个（已验证过的）版本；
+#   - 默认 AUTOSYNC=1：Web 更新装上新内核后，自动重编 eDP 模块 + 生成 initramfs/uInitrd + 切软链；
+#     校验不通过会拒绝切换（保持旧内核），--disable 可关闭、--rollback 可回滚；
 #   - `zt1-kernel-sync --enable` 打开自动跟随；`--status` 看状态；`--rollback` 回滚；
 #   - 编译 eDP 模块 / 生成 initrd 任一步失败都不切换，旧内核继续可用。
 set -e
@@ -45,7 +46,7 @@ STATE=/var/lib/zt1-kernel-sync
 DST=/usr/local/lib/zt1/analogix-dp
 MODREL=kernel/drivers/gpu/drm/bridge/analogix
 
-AUTOSYNC=0
+AUTOSYNC=1
 [ -r "$CONF" ] && . "$CONF"
 
 log() { echo "[$(date '+%F %T')] $*" >> "$LOG"; }
@@ -114,10 +115,36 @@ log "已安装 eDP 修复模块到 $MODDIR"
 command -v mkinitramfs >/dev/null 2>&1 || die "缺少 mkinitramfs"
 command -v mkimage     >/dev/null 2>&1 || die "缺少 mkimage（u-boot-tools）"
 mkinitramfs -o "$BOOT/initrd.img-$NEW" "$NEW" >>"$LOG" 2>&1 || die "mkinitramfs 失败，不切换"
-zstd -q -19 -f "$BOOT/initrd.img-$NEW" -o "$BOOT/initrd.img-$NEW.zst" >>"$LOG" 2>&1 || die "zstd 失败，不切换"
+# 注意：mkinitramfs 按 /etc/initramfs-tools/initramfs.conf 的 COMPRESS（本镜像=zstd）**已经压缩**，
+# 不能再压一次！2026-11-04 踩坑：二次 zstd 后内核报 "Initramfs unpacking failed: no cpio magic"
+# 直接 panic（VFS: Unable to mount root fs）。这里按 magic 判断，只有未压缩的 cpio 才压。
+PAYLOAD="$BOOT/initrd.img-$NEW"
+MAGIC="$(od -An -tx1 -N4 "$BOOT/initrd.img-$NEW" | tr -d ' \n')"
+case "$MAGIC" in
+    28b52ffd|1f8b*|fd377a58|04224d18|425a68*) : ;;   # 已压缩（zstd/gzip/xz/lz4/bzip2）
+    *) zstd -q -19 -f "$BOOT/initrd.img-$NEW" -o "$BOOT/initrd.img-$NEW.zst" >>"$LOG" 2>&1 \
+           || die "zstd 失败，不切换"
+       PAYLOAD="$BOOT/initrd.img-$NEW.zst" ;;
+esac
+log "initrd 格式 magic=$MAGIC（已压缩则直接打包，避免二次压缩）"
+# 切换前必须验证「解一层后就是 cpio」——2026-11-04 就是这里翻车：
+# 二次压缩导致内核 "Initramfs unpacking failed: no cpio magic" → panic → 板子开不了机。
+case "$MAGIC" in
+    28b52ffd) CPIO_MAGIC="$(zstdcat "$PAYLOAD" 2>/dev/null | head -c 6)" ;;
+    1f8b*)    CPIO_MAGIC="$(gzip -dc "$PAYLOAD" 2>/dev/null | head -c 6)" ;;
+    fd377a58) CPIO_MAGIC="$(xzcat "$PAYLOAD" 2>/dev/null | head -c 6)" ;;
+    *)        CPIO_MAGIC="$(head -c 6 "$PAYLOAD")" ;;
+esac
+case "$CPIO_MAGIC" in
+    07070*) : ;;
+    *) die "initrd 解开后不是 cpio（magic='$CPIO_MAGIC'），拒绝切换内核" ;;
+esac
 mkimage -A arm64 -O linux -T ramdisk -C none -n "uInitrd $NEW" \
-        -d "$BOOT/initrd.img-$NEW.zst" "$BOOT/uInitrd-$NEW" >>"$LOG" 2>&1 || die "mkimage 失败，不切换"
-rm -f "$BOOT/initrd.img-$NEW.zst"
+        -d "$PAYLOAD" "$BOOT/uInitrd-$NEW" >>"$LOG" 2>&1 || die "mkimage 失败，不切换"
+[ "$PAYLOAD" = "$BOOT/initrd.img-$NEW.zst" ] && rm -f "$BOOT/initrd.img-$NEW.zst"
+# 再确认 uInitrd 里是同一份载荷（uImage 头 64B）
+[ "$(dd if="$BOOT/uInitrd-$NEW" bs=1 skip=64 count=4 2>/dev/null | od -An -tx1 | tr -d ' \n')" = "$MAGIC" ] \
+    || die "uInitrd 头部载荷校验失败，不切换"
 log "已生成 $BOOT/uInitrd-$NEW（$(du -h "$BOOT/uInitrd-$NEW" | cut -f1)）"
 
 # ---- 3. 切换软链（保留旧内核，可 --rollback）----
@@ -134,7 +161,7 @@ cat > "$ROOTFS/etc/zerot1/kernel-sync.conf" <<'EOC'
 # fnOS Web 更新后是否自动把 /boot/Image|uInitrd 切到新内核
 #   1 = 自动跟随（会重编 eDP 补丁模块 + 生成 initrd，失败则保持旧内核）
 #   0 = 只保留更新能力，内核不自动切换（默认；验证新内核没问题后再开）
-AUTOSYNC=0
+AUTOSYNC=1
 EOC
 chmod 0644 "$ROOTFS/etc/zerot1/kernel-sync.conf"
 
@@ -168,4 +195,4 @@ install -d -m 0755 "$ROOTFS/etc/systemd/system/multi-user.target.wants" "$ROOTFS
 ln -sf /etc/systemd/system/zt1-kernel-sync.service "$ROOTFS/etc/systemd/system/multi-user.target.wants/zt1-kernel-sync.service"
 ln -sf /etc/systemd/system/zt1-kernel-sync.path    "$ROOTFS/etc/systemd/system/paths.target.wants/zt1-kernel-sync.path"
 
-log "已安装 zt1-kernel-sync（默认 AUTOSYNC=0；--enable/--status/--rollback）"
+log "已安装 zt1-kernel-sync（默认 AUTOSYNC=1；--disable/--status/--rollback）"
