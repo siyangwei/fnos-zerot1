@@ -177,7 +177,12 @@ Web 更新装上新内核后，它会自动
 2. `mkinitramfs` + `mkimage` 生成 `uInitrd-<ver>`；
 3. 把 `Image` / `uInitrd` 软链切到新内核（旧内核保留，可回滚）。
 
-安全措施：任一步失败或 initrd 校验不通过（会先解一层确认是 cpio）都**拒绝切换**，继续用旧内核。
+安全措施：任一步失败或 initrd 校验不通过（会先解一层确认是 cpio）都**拒绝切换**，继续用旧内核；
+同步用 `flock` 串行化，path 触发与开机触发不会重复重编。
+
+切换成功后默认**自动重启一次**（`REBOOT_AFTER_SYNC=1`）让新内核真正生效：
+fnOS 的更新流程是「装完包立刻自动重启」，那次重启时 `/Image` 仍指向旧内核，
+本服务随后切软链并再自动重启一次，用户全程不用手动干预（想手动控制就设 `REBOOT_AFTER_SYNC=0`）。
 
 ```bash
 zt1-kernel-sync --status     # 看当前内核/软链/AUTOSYNC

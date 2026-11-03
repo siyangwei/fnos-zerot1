@@ -56,7 +56,14 @@ DST=/usr/local/lib/zt1/analogix-dp
 MODREL=kernel/drivers/gpu/drm/bridge/analogix
 
 AUTOSYNC=1
+REBOOT_AFTER_SYNC=1
+AUTOMODE=0
 [ -r "$CONF" ] && . "$CONF"
+
+# 并发保护：path 触发与开机触发可能同时进来，避免重复重编/重复切软链
+mkdir -p "$STATE"
+exec 9>"$STATE/lock"
+flock -n 9 || { echo "[$(date '+%F %T')] 另一个同步进程在运行，跳过" >> "$LOG"; exit 0; }
 
 log() { echo "[$(date '+%F %T')] $*" >> "$LOG"; }
 say() { log "$*"; echo "$*"; }
@@ -81,8 +88,10 @@ case "${1:-}" in
       say "已回滚：Image -> $P"
       exit 0 ;;
   --force)  FORCE=1 ;;
+  --auto)   AUTOMODE=1 ;;
   *)        FORCE=0 ;;
 esac
+[ "$*" = "" ] && AUTOMODE=1   # 不带参数（systemd 服务）按自动模式
 
 [ "$AUTOSYNC" = 1 ] || [ "${FORCE:-0}" = 1 ] || { log "AUTOSYNC=0，跳过（zt1-kernel-sync --force 可手动同步）"; exit 0; }
 
@@ -180,6 +189,21 @@ ln -sfn "vmlinuz-$NEW" "$BOOT/Image"
 ln -sfn "uInitrd-$NEW" "$BOOT/uInitrd"
 sync
 say "内核已切换：Image -> vmlinuz-$NEW，uInitrd -> uInitrd-$NEW（旧: $(cat "$STATE/previous")，回滚: zt1-kernel-sync --rollback）"
+
+# ---- 4. 自动模式且允许时，自动重启一次让新内核生效 ----
+# fnOS Web 更新会先自动重启一次（此时 Image 仍指旧内核），本服务随后才切换软链，
+# 所以这里再重启一次，用户不用手动操作即可进入新内核。
+if [ "$AUTOMODE" = 1 ] && [ "$REBOOT_AFTER_SYNC" = 1 ]; then
+    say "按配置自动重启以启用新内核（REBOOT_AFTER_SYNC=1，30 秒后重启）"
+    sync
+    # 优先用 transient timer（独立于本服务，服务退出后仍会触发）
+    if ! systemd-run --on-active=30 --collect --unit="zt1-ksync-reboot-$$" \
+            /bin/systemctl reboot >>"$LOG" 2>&1; then
+        log "systemd-run 失败，改用 shutdown -r 定时重启"
+        shutdown -r +1 "zt1-kernel-sync: 切换到新内核" >>"$LOG" 2>&1 \
+            || log "警告: 自动重启调度失败，请手动重启"
+    fi
+fi
 EOS
 chmod 0755 "$ROOTFS/usr/local/sbin/zt1-kernel-sync"
 
@@ -187,8 +211,10 @@ chmod 0755 "$ROOTFS/usr/local/sbin/zt1-kernel-sync"
 cat > "$ROOTFS/etc/zerot1/kernel-sync.conf" <<'EOC'
 # fnOS Web 更新后是否自动把 /boot/Image|uInitrd 切到新内核
 #   1 = 自动跟随（会重编 eDP 补丁模块 + 生成 initrd，失败则保持旧内核）
-#   0 = 只保留更新能力，内核不自动切换（默认；验证新内核没问题后再开）
+#   0 = 只保留更新能力，内核不自动切换
 AUTOSYNC=1
+# 自动模式下切换成功后是否自动重启一次（1=是，默认；0=等用户手动重启）
+REBOOT_AFTER_SYNC=1
 EOC
 chmod 0644 "$ROOTFS/etc/zerot1/kernel-sync.conf"
 
@@ -201,7 +227,7 @@ ConditionPathIsMountPoint=/boot
 
 [Service]
 Type=oneshot
-ExecStart=/usr/local/sbin/zt1-kernel-sync
+ExecStart=/usr/local/sbin/zt1-kernel-sync --auto
 Nice=10
 IOSchedulingClass=idle
 EOF
