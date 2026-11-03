@@ -32,6 +32,15 @@ install -m 0644 "$SRC/analogix_dp_core.c" "$SRC/analogix_dp_core.h" \
                 "$SRC/analogix_dp_reg.c"  "$SRC/analogix_dp_reg.h" \
                 "$SRC/Makefile" "$ROOTFS/usr/local/lib/zt1/analogix-dp/"
 
+# ---- 1b. 其余 zeroT1 外挂模块源码（换内核后同样要重编，否则复位/看门狗修复失效）----
+install -d -m 0755 "$ROOTFS/usr/local/lib/zt1/rk806-rstfix" "$ROOTFS/usr/local/lib/zt1/smdt-mcu-wdt"
+install -m 0644 "$REPO/kernel-modules/rk806-rstfix/rk806_rstfix.c" \
+                "$REPO/kernel-modules/rk806-rstfix/Makefile" \
+                "$ROOTFS/usr/local/lib/zt1/rk806-rstfix/"
+install -m 0644 "$REPO/kernel-modules/smdt-mcu-wdt/smdt_mcu_wdt.c" \
+                "$REPO/kernel-modules/smdt-mcu-wdt/Makefile" \
+                "$ROOTFS/usr/local/lib/zt1/smdt-mcu-wdt/"
+
 # ---- 2. 同步脚本 ----
 install -d -m 0755 "$ROOTFS/usr/local/sbin" "$ROOTFS/etc/zerot1" "$ROOTFS/var/lib/zt1-kernel-sync"
 cat > "$ROOTFS/usr/local/sbin/zt1-kernel-sync" <<'EOS'
@@ -110,6 +119,24 @@ MODDIR="$KDIR/$MODREL"; mkdir -p "$MODDIR"
 cp -f "$BD/analogix_dp.ko" "$MODDIR/analogix_dp.ko"
 depmod "$NEW" >/dev/null 2>&1 || log "警告: depmod $NEW 失败（不致命）"
 log "已安装 eDP 修复模块到 $MODDIR"
+
+# ---- 1b. 重编 zeroT1 外挂模块（RK806 PMIC 复位修复 / MCU 看门狗）----
+for pair in rk806-rstfix:rk806_rstfix smdt-mcu-wdt:smdt_mcu_wdt; do
+    md="${pair%%:*}"; ko="${pair##*:}"; sd="/usr/local/lib/zt1/$md"
+    [ -d "$sd" ] || { log "跳过 $md（源码缺失）"; continue; }
+    bd="$(mktemp -d)"
+    cp -a "$sd"/. "$bd"/
+    if make -C "$HB" M="$bd" ARCH=arm64 modules >"$bd/build.log" 2>&1 && [ -f "$bd/$ko.ko" ]; then
+        edir="$KDIR/updates/zerot1"; mkdir -p "$edir"
+        cp -f "$bd/$ko.ko" "$edir/$ko.ko"
+        log "已安装 $ko.ko 到 $edir"
+    else
+        log "警告: $ko.ko 编译失败（新内核 $NEW），跳过（不致命，但对应硬件修复会失效）"
+        tail -10 "$bd/build.log" >> "$LOG"
+    fi
+    rm -rf "$bd"
+done
+depmod "$NEW" >/dev/null 2>&1 || log "警告: depmod $NEW 失败（不致命）"
 
 # ---- 2. initrd.img + uInitrd ----
 command -v mkinitramfs >/dev/null 2>&1 || die "缺少 mkinitramfs"

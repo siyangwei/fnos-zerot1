@@ -887,7 +887,7 @@ static struct i2c_driver smdt_mcu_wdt_driver = {
 		.of_match_table	= smdt_mcu_wdt_of_match,
 		.pm		= &smdt_mcu_wdt_pm_ops,
 	},
-	.probe_new	= smdt_mcu_wdt_probe,
+	.probe		= smdt_mcu_wdt_probe,
 	.remove		= smdt_mcu_wdt_remove,
 	.shutdown	= smdt_mcu_wdt_shutdown,
 	.id_table	= smdt_mcu_wdt_id,

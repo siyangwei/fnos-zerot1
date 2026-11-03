@@ -157,6 +157,30 @@ sudo env SKIP_ROOTFS=1 SKIP_BOOT=1 SKIP_DTS=1 ./scripts/build-all.sh
 
 构建产物在 `output/fnos-aiot3588a-update-<日期>.img`，脚本会打印 sha256。
 
+### 4. 系统更新与内核同步（重要）
+
+fnOS 的「系统更新」是按包 `dpkg` 安装的，会把新内核写进 `/boot/vmlinuz-<ver>` 并用符号链接
+`Image` / `uInitrd` 指向当前版本（镜像的 boot 分区是 **512MB**，足够放多版内核）。
+
+本镜像自带 `zt1-kernel-sync`（`/usr/local/sbin/`，systemd service + path 触发，默认 `AUTOSYNC=1`）：
+Web 更新装上新内核后，它会自动
+
+1. 用新内核的 `linux-headers` 重编三个外挂模块：`analogix_dp.ko`（eDP 点亮）、`rk806_rstfix.ko`（PMIC 复位→重启）、`smdt_mcu_wdt.ko`（板载 MCU 看门狗）；
+2. `mkinitramfs` + `mkimage` 生成 `uInitrd-<ver>`；
+3. 把 `Image` / `uInitrd` 软链切到新内核（旧内核保留，可回滚）。
+
+安全措施：任一步失败或 initrd 校验不通过（会先解一层确认是 cpio）都**拒绝切换**，继续用旧内核。
+
+```bash
+zt1-kernel-sync --status     # 看当前内核/软链/AUTOSYNC
+zt1-kernel-sync --force      # 立即同步一次（不等更新）
+zt1-kernel-sync --rollback   # 回滚到上一个内核
+zt1-kernel-sync --disable    # 关掉自动跟随
+```
+
+> 更新后如果系统自动重启了一次，此时可能只是"内核已装但未切换"。再执行一次
+> `zt1-kernel-sync --status` 确认，必要时 `--force`，然后再重启一次即用上新内核。
+
 ### 4. 构建（GitHub Actions）
 
 `.github/workflows/build.yml`：
