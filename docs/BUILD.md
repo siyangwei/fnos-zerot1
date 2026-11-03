@@ -80,14 +80,16 @@ sudo ./scripts/patch-rootfs.sh work/rootfs --only 57,70   # 只重跑指定补�
 | uboot | 0x4000 | 4MB | — | `assets/uboot.img` |
 | misc | 0x6000 | 4MB | — | 全零 |
 | resource | 0x8000 | 16MB | — | `resource_tool` 打的 `rk-kernel.dtb` |
-| boot | 0x10000 | 64MB | **ext4** | `Image` + `uInitrd` + `dtb/rockchip/*` + `extlinux/` |
+| boot | 0x10000 | **512MB** | **ext4** | `vmlinuz-*`/`uInitrd-*`/`config-*`/`System.map-*` + `Image`、`uInitrd` 符号链接 + `dtb/rockchip/*` + `extlinux/` |
 | rootfs | 0x30000 | 内容 +64MB 对齐 | btrfs | `work/rootfs` |
 | userdata | rootfs 之后 | grow | btrfs | 空分区 |
 
 要点：
 
-- **boot 必须是 ext4**：定制 u-boot 里补了 `CONFIG_FS_EXT4`，直接从 `mmc 0:4` 读
-  `/Image` → `/uInitrd` → `/dtb/rockchip/rk3588-aiot3588a.dtb` 后 `booti`；
+- **boot 必须是 ext4、512MB**：定制 u-boot 里补了 `CONFIG_FS_EXT4`，直接从 `mmc 0:4` 读
+  `/Image` → `/uInitrd` → `/dtb/rockchip/rk3588-aiot3588a.dtb` 后 `booti`；`Image`/`uInitrd`
+  是符号链接（u-boot 的 ext4 驱动支持解析），指向版本化内核文件，这样 fnOS Web 更新
+  装的新内核能自动生效。512MB 才能容纳 42.8MB vmlinuz + initrd + 旧版本（每版约 87MB）；
   不读 `boot.scr` / `extlinux.conf`（后者只留给宿主机手动 `sysboot`）。
 - **u-boot 2017.09 的 ext4 驱动不支持 64bit / metadata_csum**，`mkfs.ext4` 必须加
   `-O ^64bit,^metadata_csum -I 256`，否则 u-boot 报 `Unrecognized filesystem type`。

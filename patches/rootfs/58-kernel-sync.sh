@@ -1,0 +1,171 @@
+#!/bin/bash
+# 58-kernel-sync.sh —— 让 fnOS Web 更新后的新内核真正生效（/boot 版本化 + Image/uInitrd 软链同步）
+#
+# 背景（2026-11-04 实测）：
+#   fnOS 的 Web 更新是「逐包 dpkg 安装」，新内核会写 /boot/vmlinuz-<ver>、initrd.img-<ver>。
+#   官方镜像的 /boot 是 512MB 且 Image/uInitrd 是指向当前版本文件的**符号链接**，所以
+#   装完新内核后 u-boot 加载 /Image 自动就是新内核。
+#   我们早期镜像只有 64MB boot + 普通文件 Image/uInitrd，因此：
+#     ① dpkg 写 42.8MB vmlinuz 直接 ENOSPC（更新失败）；
+#     ② 即使写进去，Image 仍指向旧内核（更新"成功"但不生效）。
+#   images 已把 boot 改成 512MB + 版本化文件名 + 软链（scripts/pack-image.sh）。
+#   本补丁补上「内核安装后自动生成 initrd/uInitrd、重建我们打补丁的 analogix_dp.ko、
+#   并把软链切到新内核」这半件事，否则新内核缺少 eDP 修复（会黑屏/不显示）。
+#
+# 安全设计：
+#   - 默认 AUTOSYNC=0：只修空间与布局，内核保持在镜像内那个（已验证过的）版本；
+#   - `zt1-kernel-sync --enable` 打开自动跟随；`--status` 看状态；`--rollback` 回滚；
+#   - 编译 eDP 模块 / 生成 initrd 任一步失败都不切换，旧内核继续可用。
+set -e
+ROOTFS="${1:?用法: 58-kernel-sync.sh <rootfs-dir>}"
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO="$(cd "$HERE/../.." && pwd)"
+SRC="$REPO/kernel-modules/analogix-dp-6.18.18"
+log() { echo "[58-kernel-sync] $*"; }
+
+[ -d "$SRC" ] || { echo "缺少 $SRC（analogix_dp 源码）"; exit 1; }
+
+# ---- 1. eDP 修复模块源码（用目标内核的 linux-headers 现编）----
+install -d -m 0755 "$ROOTFS/usr/local/lib/zt1/analogix-dp"
+install -m 0644 "$SRC/analogix_dp_core.c" "$SRC/analogix_dp_core.h" \
+                "$SRC/analogix_dp_reg.c"  "$SRC/analogix_dp_reg.h" \
+                "$SRC/Makefile" "$ROOTFS/usr/local/lib/zt1/analogix-dp/"
+
+# ---- 2. 同步脚本 ----
+install -d -m 0755 "$ROOTFS/usr/local/sbin" "$ROOTFS/etc/zerot1" "$ROOTFS/var/lib/zt1-kernel-sync"
+cat > "$ROOTFS/usr/local/sbin/zt1-kernel-sync" <<'EOS'
+#!/bin/bash
+# zt1-kernel-sync —— 把 /boot/Image|uInitrd 同步到最新安装的内核（并重建 eDP 补丁模块）
+# 触发：zt1-kernel-sync.service（开机）+ zt1-kernel-sync.path（/boot 有变化，比如 Web 更新装完内核）
+set -u
+CONF=/etc/zerot1/kernel-sync.conf
+LOG=/var/log/zt1-kernel-sync.log
+BOOT=/boot
+STATE=/var/lib/zt1-kernel-sync
+DST=/usr/local/lib/zt1/analogix-dp
+MODREL=kernel/drivers/gpu/drm/bridge/analogix
+
+AUTOSYNC=0
+[ -r "$CONF" ] && . "$CONF"
+
+log() { echo "[$(date '+%F %T')] $*" >> "$LOG"; }
+say() { log "$*"; echo "$*"; }
+die() { log "失败: $*"; echo "失败: $*" >&2; exit 1; }
+
+case "${1:-}" in
+  --enable)  sed -i 's/^AUTOSYNC=.*/AUTOSYNC=1/' "$CONF" 2>/dev/null || echo 'AUTOSYNC=1' >> "$CONF"; say "已启用内核自动同步"; exit 0 ;;
+  --disable) sed -i 's/^AUTOSYNC=.*/AUTOSYNC=0/' "$CONF" 2>/dev/null || echo 'AUTOSYNC=0' >> "$CONF"; say "已关闭内核自动同步"; exit 0 ;;
+  --status)
+      say "AUTOSYNC=$AUTOSYNC"
+      say "Image   -> $(readlink "$BOOT/Image" 2>/dev/null || echo '(普通文件)')"
+      say "uInitrd -> $(readlink "$BOOT/uInitrd" 2>/dev/null || echo '(普通文件)')"
+      echo "--- /boot 内核文件 ---"; ls -lh "$BOOT"/vmlinuz-* "$BOOT"/uInitrd-* 2>/dev/null
+      echo "--- 已安装模块 ---"; ls -d /lib/modules/*/ 2>/dev/null
+      exit 0 ;;
+  --rollback)
+      [ -f "$STATE/previous" ] || die "没有回滚记录"
+      P="$(cat "$STATE/previous")"
+      [ -f "$BOOT/$P" ] || die "旧内核 $BOOT/$P 不存在"
+      ln -sfn "$P" "$BOOT/Image"
+      ln -sfn "uInitrd-${P#vmlinuz-}" "$BOOT/uInitrd"
+      say "已回滚：Image -> $P"
+      exit 0 ;;
+  --force)  FORCE=1 ;;
+  *)        FORCE=0 ;;
+esac
+
+[ "$AUTOSYNC" = 1 ] || [ "${FORCE:-0}" = 1 ] || { log "AUTOSYNC=0，跳过（zt1-kernel-sync --force 可手动同步）"; exit 0; }
+
+CUR="$(readlink -f "$BOOT/Image" 2>/dev/null || true)"
+[ -n "$CUR" ] && [ -f "$CUR" ] || CUR="$BOOT/Image"
+NEW="$(ls -1 "$BOOT"/vmlinuz-* 2>/dev/null | sed -n 's#.*/vmlinuz-##p' | sort -V | tail -1)"
+[ -n "$NEW" ] || { log "没有 /boot/vmlinuz-*，跳过"; exit 0; }
+NEWF="$BOOT/vmlinuz-$NEW"
+[ -f "$NEWF" ] || die "$NEWF 不存在"
+
+if [ "$(md5sum < "$NEWF" | cut -d' ' -f1)" = "$(md5sum < "$CUR" | cut -d' ' -f1)" ]; then
+    log "已是最新内核 $NEW（Image -> $(basename "$CUR")）"; exit 0
+fi
+
+log "发现新内核 $NEW（当前 Image -> $(basename "$CUR")），开始同步"
+KDIR="/lib/modules/$NEW"; [ -d "$KDIR" ] || die "缺少 /lib/modules/$NEW"
+HB="$KDIR/build"; [ -d "$HB" ] || HB="/usr/src/linux-headers-$NEW"
+[ -d "$HB" ] || die "缺少 linux-headers-$NEW，不切换（避免新内核缺 eDP 修复）"
+[ -d "$DST" ] || die "缺少 $DST"
+
+# 空间检查（initrd + uInitrd 约 40MB）
+AVAIL_MB=$(df -Pm "$BOOT" | awk 'NR==2{print $4}')
+[ "${AVAIL_MB:-0}" -ge 120 ] || die "/boot 剩余 ${AVAIL_MB}MB < 120MB，不切换（分区太小？）"
+
+# ---- 1. 重编 analogix_dp.ko ----
+BD="$(mktemp -d)"; trap 'rm -rf "$BD"' EXIT
+cp -a "$DST"/. "$BD"/
+if ! make -C "$HB" M="$BD" ARCH=arm64 modules >"$BD/build.log" 2>&1; then
+    tail -20 "$BD/build.log" >> "$LOG"; die "analogix_dp.ko 编译失败（新内核 $NEW），不切换"
+fi
+[ -f "$BD/analogix_dp.ko" ] || die "编译产物缺失，不切换"
+MODDIR="$KDIR/$MODREL"; mkdir -p "$MODDIR"
+[ -f "$MODDIR/analogix_dp.ko" ] && cp -f "$MODDIR/analogix_dp.ko" "$STATE/analogix_dp.ko.$NEW.bak"
+cp -f "$BD/analogix_dp.ko" "$MODDIR/analogix_dp.ko"
+depmod "$NEW" >/dev/null 2>&1 || log "警告: depmod $NEW 失败（不致命）"
+log "已安装 eDP 修复模块到 $MODDIR"
+
+# ---- 2. initrd.img + uInitrd ----
+command -v mkinitramfs >/dev/null 2>&1 || die "缺少 mkinitramfs"
+command -v mkimage     >/dev/null 2>&1 || die "缺少 mkimage（u-boot-tools）"
+mkinitramfs -o "$BOOT/initrd.img-$NEW" "$NEW" >>"$LOG" 2>&1 || die "mkinitramfs 失败，不切换"
+zstd -q -19 -f "$BOOT/initrd.img-$NEW" -o "$BOOT/initrd.img-$NEW.zst" >>"$LOG" 2>&1 || die "zstd 失败，不切换"
+mkimage -A arm64 -O linux -T ramdisk -C none -n "uInitrd $NEW" \
+        -d "$BOOT/initrd.img-$NEW.zst" "$BOOT/uInitrd-$NEW" >>"$LOG" 2>&1 || die "mkimage 失败，不切换"
+rm -f "$BOOT/initrd.img-$NEW.zst"
+log "已生成 $BOOT/uInitrd-$NEW（$(du -h "$BOOT/uInitrd-$NEW" | cut -f1)）"
+
+# ---- 3. 切换软链（保留旧内核，可 --rollback）----
+echo "$(basename "$CUR")" > "$STATE/previous"
+ln -sfn "vmlinuz-$NEW" "$BOOT/Image"
+ln -sfn "uInitrd-$NEW" "$BOOT/uInitrd"
+sync
+say "内核已切换：Image -> vmlinuz-$NEW，uInitrd -> uInitrd-$NEW（旧: $(cat "$STATE/previous")，回滚: zt1-kernel-sync --rollback）"
+EOS
+chmod 0755 "$ROOTFS/usr/local/sbin/zt1-kernel-sync"
+
+# ---- 3. 配置文件（默认不自动切换，先验证布局与更新链路）----
+cat > "$ROOTFS/etc/zerot1/kernel-sync.conf" <<'EOC'
+# fnOS Web 更新后是否自动把 /boot/Image|uInitrd 切到新内核
+#   1 = 自动跟随（会重编 eDP 补丁模块 + 生成 initrd，失败则保持旧内核）
+#   0 = 只保留更新能力，内核不自动切换（默认；验证新内核没问题后再开）
+AUTOSYNC=0
+EOC
+chmod 0644 "$ROOTFS/etc/zerot1/kernel-sync.conf"
+
+# ---- 4. systemd 单元：开机一次 + /boot 变化即触发 ----
+cat > "$ROOTFS/etc/systemd/system/zt1-kernel-sync.service" <<'EOF'
+[Unit]
+Description=zeroT1 kernel sync (/boot/Image,uInitrd -> newest installed kernel)
+After=local-fs.target
+ConditionPathIsMountPoint=/boot
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/zt1-kernel-sync
+Nice=10
+IOSchedulingClass=idle
+EOF
+
+cat > "$ROOTFS/etc/systemd/system/zt1-kernel-sync.path" <<'EOF'
+[Unit]
+Description=Watch /boot for newly installed kernels
+
+[Path]
+PathChanged=/boot
+Unit=zt1-kernel-sync.service
+
+[Install]
+WantedBy=paths.target
+EOF
+
+install -d -m 0755 "$ROOTFS/etc/systemd/system/multi-user.target.wants" "$ROOTFS/etc/systemd/system/paths.target.wants"
+ln -sf /etc/systemd/system/zt1-kernel-sync.service "$ROOTFS/etc/systemd/system/multi-user.target.wants/zt1-kernel-sync.service"
+ln -sf /etc/systemd/system/zt1-kernel-sync.path    "$ROOTFS/etc/systemd/system/paths.target.wants/zt1-kernel-sync.path"
+
+log "已安装 zt1-kernel-sync（默认 AUTOSYNC=0；--enable/--status/--rollback）"

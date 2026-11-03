@@ -5,7 +5,10 @@
 #   uboot    0x004000 .. +0x2000   (4MB,   预编译 assets/uboot.img)
 #   misc     0x006000 .. +0x2000   (4MB,   全零，清 Android recovery 标记)
 #   resource 0x008000 .. +0x8000   (16MB,  rk-kernel.dtb，u-boot 早期读)
-#   boot     0x010000 .. +0x20000  (64MB,  ext4) -- Image + uInitrd + dtb/ + extlinux/
+#   boot     0x010000 .. +0x100000 (512MB, ext4) -- 版本化内核 + Image/uInitrd 符号链接 + dtb/ + extlinux/
+#            512MB/符号链接布局与 fnOS 官方镜像一致：dpkg 装新内核要写 42MB vmlinuz + initrd，
+#            64MB 分区必然 ENOSPC（2026-11-04 实测更新失败根因）；Image/uInitrd 是软链，
+#            u-boot 加载 /Image 自动跟随最新内核。
 #   rootfs   0x030000 .. +<按 rootfs 大小，64MB 对齐>  (btrfs)
 #   userdata 紧接 rootfs 之后，grow 到盘尾
 #
@@ -36,8 +39,8 @@ FNOS_BOOT="${FNOS_BOOT:-$WORK_DIR/boot-fnos}"
 UBOOT_START=0x4000;  UBOOT_SIZE=0x2000
 MISC_START=0x6000;   MISC_SIZE=0x2000
 RES_START=0x8000;    RES_SIZE=0x8000
-BOOT_START=0x10000;  BOOT_SIZE=0x20000
-ROOTFS_START=0x30000
+BOOT_START=0x10000;  BOOT_SIZE=0x100000      # 512MB，与 fnOS 官方镜像一致
+ROOTFS_START=0x110000                        # boot 之后（0x10000 + 0x100000）
 
 # rootfs 大小：按 64MB 对齐（+3 块冗余，跟 sd-fuse 的 build-rootfs-img.sh 一致）
 ROOTFS_USED_MB=$(( $(du -sm "$ROOTFS" | cut -f1) + 3 ))
@@ -79,7 +82,15 @@ log "生成 boot.img (ext4 ${BOOT_SIZE} 扇区)"
 BOOT_SRC="$UPDATE_DIR/boot"
 rm -rf "$BOOT_SRC"
 mkdir -p "$BOOT_SRC"
-cp -a "$FNOS_BOOT/." "$BOOT_SRC/"
+# 版本化内核文件 + Image/uInitrd 符号链接（fnOS 官方布局，u-boot 走软链加载最新内核）
+KVER="$(awk -F': *' '/kernel version/{print $2; exit}' "$FNOS_BOOT/BUILD-INFO.txt" 2>/dev/null || true)"
+KVER="${KVER:-6.18.18-trim}"
+cp -a "$FNOS_BOOT/Image"     "$BOOT_SRC/vmlinuz-$KVER"
+cp -a "$FNOS_BOOT/uInitrd"   "$BOOT_SRC/uInitrd-$KVER"
+[ -f "$FNOS_BOOT/config" ]     && cp -a "$FNOS_BOOT/config"     "$BOOT_SRC/config-$KVER"
+[ -f "$FNOS_BOOT/System.map" ] && cp -a "$FNOS_BOOT/System.map" "$BOOT_SRC/System.map-$KVER"
+ln -sfn "vmlinuz-$KVER" "$BOOT_SRC/Image"
+ln -sfn "uInitrd-$KVER" "$BOOT_SRC/uInitrd"
 # 板级 dtb（含 Type-C device 变体）；u-boot 固定加载 rk3588-aiot3588a.dtb
 mkdir -p "$BOOT_SRC/dtb/rockchip"
 cp -f "$IMAGE_DIR/dtb/rockchip/rk3588-aiot3588a.dtb" "$BOOT_SRC/dtb/rockchip/"
@@ -102,8 +113,8 @@ log "boot 分区内容 ${USED_MB}MB / 分区 $(( BOOT_SIZE / 2048 ))MB"
 [ "$USED_MB" -lt $(( BOOT_SIZE / 2048 - 6 )) ] || die "boot 分区空间不足（内容 ${USED_MB}MB）"
 truncate -s $(( BOOT_SIZE * 512 )) "$UPDATE_DIR/boot.img"
 # u-boot 2017.09 的 ext4 驱动不支持 64bit / metadata_csum 特性，必须关掉；
-# 64MB 分区要装 32MB Image + 17MB uInitrd，再去掉日志（-O ^has_journal）、
-# 预留块（-m 0）和多余 inode 表（-N 1024），否则 cp 到一半 ENOSPC。
+# 再关日志（^has_journal）、预留块（-m 0）与多余 inode 表（-N 1024）--
+# 512MB 分区装 1 个内核 ~50MB、留 2~5 个版本（官方布局），关掉这些可减少元数据占用。
 mkfs.ext4 -q -F -L BOOT -O ^64bit,^metadata_csum,^has_journal -m 0 -N 1024 -I 256 "$UPDATE_DIR/boot.img"
 MNTB="$WORK_DIR/mnt-boot"
 mkdir -p "$MNTB"
@@ -175,7 +186,7 @@ CHECK_MASK: 0x80
 TYPE: GPT
 PWR_HLD: 0,0,A,0,1
 PACKAGE_FILE: parameter.txt
-CMDLINE: mtdparts=rk29xxnand:0x00002000@0x00004000(uboot),0x00002000@0x00006000(misc),0x00008000@0x00008000(resource),0x00020000@0x00010000(boot),0x$(printf '%08x' $ROOTFS_SIZE)@0x$(printf '%08x' $ROOTFS_START)(rootfs)
+CMDLINE: mtdparts=rk29xxnand:0x00002000@0x00004000(uboot),0x00002000@0x00006000(misc),0x00008000@0x00008000(resource),0x$(printf '%08x' $BOOT_SIZE)@0x$(printf '%08x' $BOOT_START)(boot),0x$(printf '%08x' $ROOTFS_SIZE)@0x$(printf '%08x' $ROOTFS_START)(rootfs)
 uuid:rootfs=357e9eb7-73ea-4367-b981-6296a97687e0
 EOF
 

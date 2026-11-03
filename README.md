@@ -54,7 +54,7 @@ output/fnos-aiot3588a-update-<日期>.img   （RKFW，upgrade_tool uf 烧录）
 | 有线网络 | 千兆，实测 950 / 1015 Mbps 双向、md5 一致 |
 | 无线 | BCM43455（AP6256）2.4G/5G，5G 支持 DFS 信道（ch60/5300MHz）；蓝牙 BCM4345C5（可搜索/连接） |
 | USB | **adb over USB3.0 SuperSpeed**（bcdUSB 0x0320、5Gbps 链路）；Type-C 角色切换 `zt1-usb-role status\|device\|host` |
-| 存储 | btrfs rootfs（固定 5.6GB，不自动改分区表）；剩余空间在 fnOS Web「存储空间」里建存储池；boot 分区 ext4 |
+| 存储 | btrfs rootfs（固定 5.6GB，不自动改分区表）；剩余空间在 fnOS Web「存储空间」里建存储池；boot 分区 ext4 512MB（版本化内核 + `Image`/`uInitrd` 符号链接，与 fnOS 官方一致） |
 | 视频编解码 | 硬解：H.264（含 4K）、HEVC（含 4K）、VP9、VP8、MPEG-1/2/4、H.263、MJPEG；硬编：H.264、MJPEG |
 | 电源 / 杂项 | 秒级重启（CRU 复位 + RK806 RST_FUN 修复）、风扇 PWM、板载 MCU 看门狗、串口 console（ttyS2@1500000） |
 
@@ -188,8 +188,8 @@ sudo env SKIP_ROOTFS=1 SKIP_BOOT=1 SKIP_DTS=1 ./scripts/build-all.sh
 | uboot | 0x4000 | 4MB | — | 定制 u-boot |
 | misc | 0x6000 | 4MB | — | 全零 |
 | resource | 0x8000 | 16MB | — | `rk-kernel.dtb` |
-| boot | 0x10000 | 64MB | **ext4** | `Image` + `uInitrd` + `dtb/rockchip/*.dtb` |
-| rootfs | 0x30000 | 按内容 +64MB 对齐（约 5.6GB） | btrfs | fnOS rootfs |
+| boot | 0x10000 | **512MB** | **ext4** | `vmlinuz-*` + `uInitrd-*` + `config-*` + `System.map-*` + `Image→vmlinuz-*`、`uInitrd→uInitrd-*`（软链）+ `dtb/rockchip/*.dtb` |
+| rootfs | 0x110000 | 按内容 +64MB 对齐（约 5.6GB） | btrfs | fnOS rootfs |
 
 rootfs 之后的空间不建分区，留给 fnOS 在 Web 管理界面「存储空间」里创建存储池/扩容。
 
