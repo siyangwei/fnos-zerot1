@@ -122,6 +122,25 @@ log "boot.img 内容："; ls -lh "$BOOT_SRC" | head -8
 # sshd 因 /etc/ssh/sshd_config 非 root 拥有而拒绝启动。每次打包前强制校正回官方底稿的属主。
 bash "$HERE/normalize-ownership.sh" "$ROOTFS"
 
+# ---- 4.95 lightdm 运行时目录属主兜底 ----
+# 背景（2026-11-04）：40-xfce.sh 里曾写死 `chown -R 110:110 /var/lib/lightdm`，
+# 但 lightdm 的 uid/gid 在不同构建里并不固定（CI 镜像实测 111:122）。一旦目录属主
+# 变成别的用户（如 pulse），greeter 就无法写 .Xauthority，报
+#   "Failed to open X authority: Permission denied" → lightdm 反复失败 → 桌面起不来。
+# 这里在打包前按镜像自己的 /etc/passwd 再兜底一次（属主归一不会碰这个 base 里不存在的路径）。
+lm_dir="$ROOTFS/var/lib/lightdm"
+if [ -d "$lm_dir" ]; then
+    lm_uid="$(awk -F: '$1=="lightdm"{print $3}' "$ROOTFS/etc/passwd" 2>/dev/null || true)"
+    lm_gid="$(awk -F: '$1=="lightdm"{print $4}' "$ROOTFS/etc/passwd" 2>/dev/null || true)"
+    if [ -n "$lm_uid" ] && [ -n "$lm_gid" ]; then
+        chown -R "$lm_uid:$lm_gid" "$lm_dir"
+        chmod 755 "$lm_dir"
+        log "lightdm 目录属主校正: /var/lib/lightdm → $lm_uid:$lm_gid"
+    else
+        log "WARN: /etc/passwd 里没有 lightdm 用户，跳过 /var/lib/lightdm 属主校正"
+    fi
+fi
+
 # ---- 5. rootfs.img（btrfs，UUID 与 fstab 一致）----
 # 设 ROOTFS_IMG_REUSE=<现成 rootfs.img> 可跳过 rsync（仅改 boot/uboot 时提速）
 ROOTFS_IMG="$UPDATE_DIR/rootfs.img"

@@ -80,8 +80,16 @@ EOF
 # 清理 ophub 打包残留的孤儿家目录（/home/anna 属 uid 1000，官方底稿遗留）
 rm -rf "$ROOTFS/home/anna"
 
-# lightdm 自身状态目录属主必须是 lightdm，否则 greeter 无法写 .Xauthority
-chown -R 110:110 "$ROOTFS/var/lib/lightdm" 2>/dev/null || true
+# lightdm 自身状态目录属主必须是 lightdm，否则 greeter 无法写 .Xauthority。
+# ★ 2026-11-04 修正：不能写死 110:110 —— 不同构建里 lightdm 的编号并不固定
+#   （CI 镜像实测 lightdm=111:122，写死 110:110 会让目录变成 pulse:rdma，
+#     greeter 报 "Failed to open X authority: Permission denied"，lightdm 起不来）。
+#   统一从镜像自己的 /etc/passwd 解析 uid/gid。
+lm_uid="$(awk -F: '$1=="lightdm"{print $3}' "$ROOTFS/etc/passwd" 2>/dev/null || true)"
+lm_gid="$(awk -F: '$1=="lightdm"{print $4}' "$ROOTFS/etc/passwd" 2>/dev/null || true)"
+if [ -n "$lm_uid" ] && [ -n "$lm_gid" ]; then
+    chown -R "$lm_uid:$lm_gid" "$ROOTFS/var/lib/lightdm" 2>/dev/null || true
+fi
 
 # fnOS 精简系统没有 /run/utmp，lightdm 会报 "Failed to write utmpx"
 touch "$ROOTFS/run/utmp" 2>/dev/null || true
@@ -107,7 +115,11 @@ chroot_run "$ROOTFS" /bin/bash -c 'systemctl enable lightdm' || true
 # 1) lightdm 以 lightdm 用户写 /var/lib/lightdm/.Xauthority，镜像里该目录属主是 root
 #    → greeter 报 "Failed to open X authority: Permission denied" → lightdm 反复失败
 mkdir -p "$ROOTFS/var/lib/lightdm"
-chown -R lightdm:lightdm "$ROOTFS/var/lib/lightdm" 2>/dev/null || true
+lm_uid="$(awk -F: '$1=="lightdm"{print $3}' "$ROOTFS/etc/passwd" 2>/dev/null || true)"
+lm_gid="$(awk -F: '$1=="lightdm"{print $4}' "$ROOTFS/etc/passwd" 2>/dev/null || true)"
+if [ -n "$lm_uid" ] && [ -n "$lm_gid" ]; then
+    chown -R "$lm_uid:$lm_gid" "$ROOTFS/var/lib/lightdm" 2>/dev/null || true
+fi
 chmod 755 "$ROOTFS/var/lib/lightdm"
 
 # 2) Debian 默认禁止 root 自动登录：注释掉 pam_succeed_if 那一行
