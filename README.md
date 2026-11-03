@@ -56,6 +56,8 @@ output/fnos-aiot3588a-update-<日期>.img   （RKFW，upgrade_tool uf 烧录）
 | USB | **adb over USB3.0 SuperSpeed**（bcdUSB 0x0320、5Gbps 链路）；Type-C 角色切换 `zt1-usb-role status\|device\|host` |
 | 存储 | btrfs rootfs（固定 5.6GB，不自动改分区表）；剩余空间在 fnOS Web「存储空间」里建存储池；boot 分区 ext4 512MB（版本化内核 + `Image`/`uInitrd` 符号链接，与 fnOS 官方一致） |
 | 视频编解码 | 硬解：H.264（含 4K）、HEVC（含 4K）、VP9、VP8、MPEG-1/2/4、H.263、MJPEG；硬编：H.264、MJPEG |
+| GPU | Mali-G610 用户态库（fnOS 应用中心「Mali GPU Driver」可安装）：OpenCL/Vulkan/EGL 可用；XFCE 桌面固定 `AccelMethod=none`（不用 GL，避免 Mali libgbm 与 Xorg glamor 冲突） |
+| NPU | **RK3588 NPU 可用**：`rknpu 0.9.8` 正常 probe（`/sys/class/devfreq/fdab0000.npu`、`/sys/kernel/debug/rknpu/{load,freq,power}`）；实测 `librknnrt 2.3.2` + fnOS「飞牛AI引擎」`face_det.rk3588.rknn` 640x640 单帧 **145 ms**、输出 12800/3200/800 三个张量 |
 | 电源 / 杂项 | 秒级重启（CRU 复位 + RK806 RST_FUN 修复）、风扇 PWM、板载 MCU 看门狗、串口 console（ttyS2@1500000） |
 
 ### 已知问题
@@ -71,6 +73,12 @@ output/fnos-aiot3588a-update-<日期>.img   （RKFW，upgrade_tool uf 烧录）
 - HDMI1 必须接在 VOP **VP2** 上（设备树已固定），否则与 eDP 同时启用时黑屏。
 - adb 传输速度约 18 MB/s，受厂商 adbd（android-tools 4.2.2）协议限制，链路本身 5Gbps。
 - Type-C 的 host 模式数据面未做完整验证（默认 `USB_ROLE=host`，插 PC 自动切 device 跑 adb）。
+- 安装「Mali GPU Driver」后，Mali 的 `libgbm/libEGL` 会通过 `/etc/ld.so.conf.d/00-aarch64-mali.conf`
+  抢先于 Mesa 被加载；Xorg modesetting 的 glamor 此时会 `ScreenInit failed` 导致 lightdm 起不来。
+  镜像已预置 `/etc/X11/xorg.conf.d/20-zt1-accel.conf`（`AccelMethod=none`）避开该问题，桌面不受影响。
+- NPU 需要两处设备树配合（镜像已内置）：①NPU 三段 reg 只映射低 `0x9000`（0x9000/0xa000 偏移被 npu iommu 占用，
+  按厂商 0x10000 映射会 `-EBUSY`）；②补 `npu-opp-table`（否则 `rknpu 0.9.8` 报
+  `failed to init opp info` 不绑定驱动、devfreq 不出现）。
 
 ---
 

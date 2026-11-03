@@ -37,6 +37,7 @@ update-locale LANG=zh_CN.UTF-8
 apt-get install -y --no-install-recommends \
     xorg xserver-xorg-video-fbdev xserver-xorg-video-modesetting \
     xserver-xorg-input-libinput \
+    libxcb-dri2-0 \
     dbus-x11 dbus-user-session policykit-1 \
     xfce4 xfce4-session xfce4-terminal xfce4-panel xfce4-settings \
     xfwm4 xfdesktop4 xfce4-power-manager \
@@ -52,6 +53,21 @@ if [ "$WITH_XRDP" = "--xrdp" ]; then
     systemctl enable xrdp || true
     ' || echo "[40-xfce] WARN: xrdp 安装失败"
 fi
+
+# ---- Xorg 加速策略：关闭 glamor ----
+# fnOS 应用中心的 Mali GPU Driver 会把 /usr/lib/aarch64-linux-gnu/mali 加进
+# ld.so.conf 首位，此时 Xorg 的 modesetting 驱动会拿到 Mali 的 libgbm，
+# 实测 glamor 初始化后 ScreenInit 失败、lightdm 起不来。
+# 桌面本身用不到 GL，固定 AccelMethod=none 让 X 不依赖 glamor，桌面始终可用；
+# 装着 libmali 的其它程序（OpenCL/Vulkan/EGL）仍可正常使用。
+mkdir -p "$ROOTFS/etc/X11/xorg.conf.d"
+cat > "$ROOTFS/etc/X11/xorg.conf.d/20-zt1-accel.conf" <<'XORGCONF'
+Section "Device"
+    Identifier "modeset"
+    Driver "modesetting"
+    Option "AccelMethod" "none"
+EndSection
+XORGCONF
 
 # ---- lightdm 自动登录 root，进入 XFCE ----
 mkdir -p "$ROOTFS/etc/lightdm/lightdm.conf.d"

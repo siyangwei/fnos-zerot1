@@ -399,10 +399,17 @@
 /* NPU：厂商 rknpu 驱动要求「三核合一」节点（pc/cna/core 三段 reg + 三个中断） */
 &rknn_core_0 {
 	compatible = "rockchip,rk3588-rknpu";
-	reg = <0x0 0xfdab0000 0x0 0x10000>,
-	      <0x0 0xfdac0000 0x0 0x10000>,
-	      <0x0 0xfdad0000 0x0 0x10000>;
+	/* 只映射每段低 0x9000：0x9000/0xa000 偏移处是 npu iommu 自身的寄存器
+	 * （rknn_mmu_0 已注册 0xfdab9000/0xfdaba000/0xfdaca000/0xfdada000），
+	 * 若这里按厂商的 0x10000 申请整段，fnOS 内核用 devm_ioremap_resource
+	 * 会与之冲突报 "error -EBUSY: can't request region for resource"。
+	 */
+	reg = <0x0 0xfdab0000 0x0 0x9000>,
+	      <0x0 0xfdac0000 0x0 0x9000>,
+	      <0x0 0xfdad0000 0x0 0x9000>;
 	reg-names = "pc", "cna", "core";
+	operating-points-v2 = <&npu_opp_table>;
+	opp-names = "npu";
 	interrupts = <GIC_SPI 110 IRQ_TYPE_LEVEL_HIGH 0>,
 		     <GIC_SPI 111 IRQ_TYPE_LEVEL_HIGH 0>,
 		     <GIC_SPI 112 IRQ_TYPE_LEVEL_HIGH 0>;
@@ -456,6 +463,49 @@
 
 &rknn_mmu_2 {
 	status = "disabled";
+};
+
+/* NPU OPP 表：fnOS 的 rknpu 0.9.8 必须从 DT 取 OPP，否则 probe 报
+ * "failed to init opp info / failed to init_opp_table" 并放弃绑定（devfreq 不出现）。
+ * 频率/电压取自厂商 5.10 反编译 dts（vdd_npu_s0 双 supply，min/target/max ×2）。
+ */
+/ {
+	npu_opp_table: npu-opp-table {
+		compatible = "operating-points-v2";
+
+		opp-300000000 {
+			opp-hz = /bits/ 64 <300000000>;
+			opp-microvolt = <700000 700000 850000 700000 700000 850000>;
+		};
+		opp-400000000 {
+			opp-hz = /bits/ 64 <400000000>;
+			opp-microvolt = <700000 700000 850000 700000 700000 850000>;
+		};
+		opp-500000000 {
+			opp-hz = /bits/ 64 <500000000>;
+			opp-microvolt = <700000 700000 850000 700000 700000 850000>;
+		};
+		opp-600000000 {
+			opp-hz = /bits/ 64 <600000000>;
+			opp-microvolt = <700000 700000 850000 700000 700000 850000>;
+		};
+		opp-700000000 {
+			opp-hz = /bits/ 64 <700000000>;
+			opp-microvolt = <700000 700000 850000 700000 700000 850000>;
+		};
+		opp-800000000 {
+			opp-hz = /bits/ 64 <800000000>;
+			opp-microvolt = <750000 750000 850000 750000 750000 850000>;
+		};
+		opp-900000000 {
+			opp-hz = /bits/ 64 <900000000>;
+			opp-microvolt = <800000 800000 850000 800000 800000 850000>;
+		};
+		opp-1000000000 {
+			opp-hz = /bits/ 64 <1000000000>;
+			opp-microvolt = <850000 850000 850000 850000 850000 850000>;
+		};
+	};
 };
 
 /* RGA2：厂商 rga3.ko 内置 rga2_core0 支持 */
