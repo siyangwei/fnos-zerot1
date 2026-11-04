@@ -33,7 +33,7 @@
 #   60-desktop-apps.sh   nm-applet / blueman / chromium / alsa-utils + autostart
 #   70-audio-state.sh    ES8388 喇叭功放使能（spk switch）
 #   80-docker-fix.sh     docker.service ExecStop bug + 国内镜像源
-#   90-rootfs-resize.sh  fnnas.conf 首次启动扩到 16GiB
+#   90-rootfs-resize.sh  禁用 fnOS 自动扩容 rootfs（stub + dpkg-divert + 开机自愈）
 #   97-shell.sh          /bin/sh -> bash（厂商 adbd 硬编码 /bin/sh，dash 无 Tab 补全）
 #   98-release-cleanup.sh 发布前清理开发残留（/root/zt1-*.txt、95/96 诊断产物、历史垃圾）
 #
