@@ -1,0 +1,23 @@
+// SPDX-License-Identifier: (GPL-2.0+ OR MIT)
+/*
+ * zeroT1（AIOT-3588A）USB 变体设备树：Type-C 固定 host 模式。
+ *
+ * 用途：把唯一的 Type-C（OTG）口当主机用（插 U 盘 / 键鼠 / 网卡等）。
+ * 背景：正常 dtb 走 typec(fusb302) + usb-role-switch，但 fnOS 的 vendor 内核里
+ *       tcpm 一直 waiting_for_supplier、不会把 dwc3 切到 host，所以插设备不识别；
+ *       这里直接把 dwc3 固定成 host 并禁用 fusb302，绕开 role-switch。
+ *       该模式下列 USB 设备口当主机用，adb 不可用（要 adb 请切回 auto/device）。
+ *
+ * 切换方式：zt1-usb-role host（改 /boot 下固定 dtb 名 + 重启）。
+ * 实测（2026-11-04，fnOS 6.18.18.c1145-trim）：插 62GB USB3 U 盘可枚举成 /dev/sda。
+ */
+#include "rk3588-aiot3588a.dts"
+
+&usb_host0_xhci {
+	dr_mode = "host";
+	/delete-property/ usb-role-switch;
+};
+
+&usbc0 {
+	status = "disabled";
+};

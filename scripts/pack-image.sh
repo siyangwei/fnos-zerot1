@@ -91,14 +91,23 @@ cp -a "$FNOS_BOOT/uInitrd"   "$BOOT_SRC/uInitrd-$KVER"
 [ -f "$FNOS_BOOT/System.map" ] && cp -a "$FNOS_BOOT/System.map" "$BOOT_SRC/System.map-$KVER"
 ln -sfn "vmlinuz-$KVER" "$BOOT_SRC/Image"
 ln -sfn "uInitrd-$KVER" "$BOOT_SRC/uInitrd"
-# 板级 dtb（含 Type-C device 变体）；u-boot 固定加载 rk3588-aiot3588a.dtb
+# 板级 dtb：u-boot 固定加载 rk3588-aiot3588a.dtb（auto/otg 版，adb 走这里）
+# 另外放入 Type-C 的两种变体，zt1-usb-role 靠覆盖固定文件名 + 重启来切换：
+#   rk3588-aiot3588a.dtb.otg    auto/otg 母本（默认）
+#   rk3588-aiot3588a-host.dtb   host 模式（Type-C 当主机用，adb 不可用）
+#   rk3588-aiot3588a-usbdev.dtb device 模式（强制 peripheral，接 PC 出 adb）
 mkdir -p "$BOOT_SRC/dtb/rockchip"
 cp -f "$IMAGE_DIR/dtb/rockchip/rk3588-aiot3588a.dtb" "$BOOT_SRC/dtb/rockchip/"
-# Type-C 双 dtb：host 版另存一份 .host 母本，zt1-usb-role 用它回切
+cp -f "$BOOT_SRC/dtb/rockchip/rk3588-aiot3588a.dtb" "$BOOT_SRC/dtb/rockchip/rk3588-aiot3588a.dtb.otg"
+# 兼容旧名（历史镜像里 host 母本叫 .dtb.host，实际内容是 otg 版）
 cp -f "$BOOT_SRC/dtb/rockchip/rk3588-aiot3588a.dtb" "$BOOT_SRC/dtb/rockchip/rk3588-aiot3588a.dtb.host"
-if [ -f "$IMAGE_DIR/dtb/rockchip/rk3588-aiot3588a-usbdev.dtb" ]; then
-    cp -f "$IMAGE_DIR/dtb/rockchip/rk3588-aiot3588a-usbdev.dtb" "$BOOT_SRC/dtb/rockchip/"
-fi
+for v in host usbdev; do
+    if [ -f "$IMAGE_DIR/dtb/rockchip/rk3588-aiot3588a-$v.dtb" ]; then
+        cp -f "$IMAGE_DIR/dtb/rockchip/rk3588-aiot3588a-$v.dtb" "$BOOT_SRC/dtb/rockchip/"
+    else
+        warn "缺少 rk3588-aiot3588a-$v.dtb（zt1-usb-role $v 将不可用）"
+    fi
+done
 # extlinux.conf：宿主机手动引导（sysboot）时可用；定制 u-boot 默认走直接引导
 mkdir -p "$BOOT_SRC/extlinux"
 cat > "$BOOT_SRC/extlinux/extlinux.conf" <<'EOF'
