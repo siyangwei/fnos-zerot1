@@ -25,10 +25,20 @@ ROOTFS="${1:-${ROOTFS:-$WORK_DIR/rootfs}}"
 BASE_IMG="${BASE_IMG:-${FNOS_IMG:-$WORK_DIR/official-base.img}}"
 BASE_MNT="${BASE_MNT:-$WORK_DIR/mnt-base-root}"
 
+# 兜底：FNOS_IMG 指向的 work/fnnas_base.img 可能被清理掉，但 work/official-base.img 还在
+if [ ! -f "$BASE_IMG" ] && [ -f "$WORK_DIR/official-base.img" ]; then
+    BASE_IMG="$WORK_DIR/official-base.img"
+fi
+
 need_root
 
 [ -d "$ROOTFS" ] || { log "ERROR: rootfs 不存在: $ROOTFS"; exit 1; }
-[ -f "$BASE_IMG" ] || { log "WARN: 找不到基础镜像 $BASE_IMG，跳过属主归一"; exit 0; }
+if [ ! -f "$BASE_IMG" ]; then
+    log "ERROR: 找不到基础镜像（参照底稿），拒绝跳过属主归一"
+    log "       期望路径: $BASE_IMG"
+    log "       解决：解压底稿到 $WORK_DIR/fnnas_base.img，或设 BASE_IMG=<官方底稿镜像>"
+    exit 2
+fi
 
 # 挂基础镜像（只读，loop 自动分区映射）
 CLEANUP_LOOP=""
