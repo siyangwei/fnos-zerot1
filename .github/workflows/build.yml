@@ -41,6 +41,8 @@ jobs:
       WIFI_FALLBACK_PASSWORD: ${{ secrets.WIFI_FALLBACK_PASSWORD }}
       ROOT_PASSWORD: ${{ secrets.ROOT_PASSWORD }}
       USB_ROLE: ${{ secrets.USB_ROLE }}
+      # 射频国家码（默认 US，见 config.env.example 说明；CN 域不扫 5G DFS）
+      WIFI_COUNTRY: ${{ secrets.WIFI_COUNTRY }}
     steps:
       - name: 检出仓库
         uses: actions/checkout@v4
@@ -78,7 +80,8 @@ jobs:
           path = "config.env"
           text = open(path).read()
           for key in ("WIFI_SSID", "WIFI_PASSWORD", "WIFI_FALLBACK_SSID",
-                      "WIFI_FALLBACK_PASSWORD", "ROOT_PASSWORD", "USB_ROLE"):
+                      "WIFI_FALLBACK_PASSWORD", "ROOT_PASSWORD", "USB_ROLE",
+                      "WIFI_COUNTRY"):
               val = os.environ.get(key, "")
               if not val:
                   continue

@@ -57,7 +57,7 @@ output/fnos-aiot3588a-v1.1-update-<日期>.img   （RKFW，upgrade_tool uf 烧�
 | 显示 | **eDP 1920x1080**（dclk 132MHz）+ **HDMI1 自动 EDID**（实测 2560x1440@60）；双屏同时输出、主副屏自动切换（HDMI 插入 → HDMI 主屏，eDP 放其下方，均原生分辨率） |
 | 音频 | ES8388：喇叭 + 耳机，插入耳机自动切输出（SARADC 检测）；首启即有声（MCLK 门控已修） |
 | 有线网络 | 千兆，实测 950 / 1015 Mbps 双向、md5 一致 |
-| 无线 | BCM43455（AP6256）2.4G/5G，5G 支持 DFS 信道（ch60/5300MHz）；蓝牙 BCM4345C5（可搜索/连接） |
+| 无线 | BCM43455（AP6256）2.4G/5G，**支持 5G DFS 信道**（ch52-64/100-144，实测 5320MHz 稳定；镜像默认 `WIFI_COUNTRY=US` 并在 NetworkManager 前由 `zt1-wifi-regdom.service` 设置法规域——CN/world 域下固件不扫描 DFS，是国内 5G 搜不到的根因）；蓝牙 BCM4345C5（可搜索/连接） |
 | USB | **adb over USB3.0 SuperSpeed**（bcdUSB 0x0320、5Gbps 链路）；唯一 Type-C（OTG）口**自动识别 device/host**：插 U 盘约 1.5s 自动切主机并挂载（host 模式为 USB2 480Mbps）、拔掉约 9s 自动回 device（adb 可用），也可 `zt1-usb-role status\|auto\|device\|host [--reboot\|--now]` 手动切；2 个标准 USB-A（3.0/2.0）+ 6 路插针 USB 均正常 |
 | 存储 | btrfs rootfs（固定 5.6GB；**已用 dpkg-divert + `zt1-rootfs-guard` 永久禁止 fnOS 更新后自动扩容**）；剩余空间在 fnOS Web「存储空间」里建存储池；boot 分区 ext4 512MB（版本化内核 + `Image`/`uInitrd` 符号链接，与 fnOS 官方一致） |
 | SD/TF 卡 | 板载 SD 控制器可用：**SDR104 198MHz**，实测顺序读 **86.9 MB/s**（`GPIO0_B7` 电源极性已修） |
@@ -79,6 +79,7 @@ output/fnos-aiot3588a-v1.1-update-<日期>.img   （RKFW，upgrade_tool uf 烧�
 - HDMI 的 2K240 等高刷模式需要 FRL，本内核/固件未启用，会被拒绝；4K60 及以下（TMDS 范围）正常。
 - HDMI1 必须接在 VOP **VP2** 上（设备树已固定），否则与 eDP 同时启用时黑屏。
 - adb 传输速度约 18 MB/s，受厂商 adbd（android-tools 4.2.2）协议限制，链路本身 5Gbps。
+- **WiFi 5G 搜不到**：若你的 5G 热点在 DFS 信道（常见 ch52-64/100-144），请确认 `/etc/zerot1/config.env` 里 `WIFI_COUNTRY="US"`（默认即是）；改成 `CN` 会失去 DFS 扫描能力。最省事的替代方案是把路由器 5G 固定到非 DFS 信道（36-48 或 149-165）。
 - Type-C（唯一 OTG 口）**自动识别**：`zt1-otg-autoswitch` 守护进程每 0.5s 读 fusb302 `STATUS0`（`0x82`=CC 上挂着 sink 设备）+ xhci 设备表，自动写 dwc3 debugfs 的 `mode` 完成 device↔host 切换。原因：fnOS 内核的 typec/tcpm 不工作（无 partner、无状态机日志，`waiting_for_supplier`），内核不会自己切角色，所以用用户态补上这一层。
 - 手动/持久切换仍可用：`sudo zt1-usb-role host --now`（本次开机立即生效，不改 dtb）、`sudo zt1-usb-role host --reboot`（改 dtb 持久）；`status` 看当前 dtb 角色与运行时 mode。手动切后 10 分钟内自动切换不干预。
 - 注意：Type-C 在 **host 模式下只跑 USB2 480Mbps**（该口 USB3 SS 通道未起来；厂商 Ubuntu 用同一颗 PHY

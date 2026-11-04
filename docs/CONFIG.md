@@ -18,7 +18,7 @@ cp config.env.example config.env   # 填自己的 WiFi 与 root 密码（可留�
 | `WIFI_FALLBACK_SSID` | 空 | 主 SSID 连不上时的备用 |
 | `WIFI_FALLBACK_PASSWORD` | 空 | 备用密码 |
 | `WIFI_HIDDEN` | `0` | 隐藏 SSID 时改 `1` |
-| `WIFI_COUNTRY` | `CN` | 射频国家码（失败不影响连接） |
+| `WIFI_COUNTRY` | `US` | 射频国家码。默认 **US**：本板 BCM43455 固件在 world/CN 域下不扫描 5GHz DFS 信道（ch52-64），国内 5G 常用 5250-5350 DFS，表现为「5G 搜不到/连不上」；开机由 `zt1-wifi-regdom.service` 在 NetworkManager 前设置。需要严格 CN 域可改回 CN（DFS 信道 5G 将不可用） |
 | `ENABLE_WIFI` | `1` | `0` = 不启用首启 WiFi 脚本 |
 | `ENABLE_SSH` | `1` | `1` = 开机自启 sshd 且允许 root 密码登录 |
 | `ROOT_PASSWORD` | 空 | root 密码（SSH + 串口 console 登录用）；**留空 = 默认 `root`**（与 fnOS 官方镜像一致） |

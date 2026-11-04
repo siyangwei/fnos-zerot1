@@ -26,7 +26,11 @@ WIFI_PASSWORD="${WIFI_PASSWORD:-}"
 WIFI_FALLBACK_SSID="${WIFI_FALLBACK_SSID:-}"
 WIFI_FALLBACK_PASSWORD="${WIFI_FALLBACK_PASSWORD:-${WIFI_PASSWORD}}"
 WIFI_HIDDEN="${WIFI_HIDDEN:-0}"
-WIFI_COUNTRY="${WIFI_COUNTRY:-CN}"
+# 默认 US：本板 BCM43455 固件在国家码未设置（world 域）或设为 CN 时不会扫描
+# 5GHz DFS 信道（ch52-64/100-144），国内运营商 5G 常用 5250-5350 DFS，表现为
+# 「5G 搜不到/连不上」。US 域启用 DFS 后即可扫到并连接（实测 5320MHz 稳定）。
+# 需要严格 CN 域时可改回 CN（代价是 DFS 信道 5G 不可用，2.4G/非 DFS 5G 正常）。
+WIFI_COUNTRY="${WIFI_COUNTRY:-US}"
 ENABLE_WIFI="${ENABLE_WIFI:-1}"
 ENABLE_SSH="${ENABLE_SSH:-1}"
 ROOT_PASSWORD="${ROOT_PASSWORD:-root}"   # 默认 root/root（与 fnOS 官方镜像一致；用户可自行修改）
@@ -243,6 +247,66 @@ wifi.scan-rand-mac-address=no
 wifi.cloned-mac-address=preserve
 NM_EOF
 log "[43-config-env] 已写入 NetworkManager 99-zt1.conf（关闭 MAC 随机化）"
+
+# ── 6b. 开机设置射频法规域（WiFi 5G DFS 信道必需）────────────────────────────
+# 背景：BCM43455(brcmfmac) 在国家码未设置时停在 world 域（phy country 99: DFS-UNSET），
+# 不会扫描 5GHz DFS 信道；国内运营商 5G 大量使用 5250-5350（ch52-64）DFS，
+# 现象是「5G 热点搜不到 / Web 里连不上」。必须在 NetworkManager 扫描前设置国家码。
+# 注意：NetworkManager 自身的 wifi.country 在首次扫描之后才下发，无法解决 DFS 首扫问题，
+# 因此这里用独立的 oneshot 服务（Before=NetworkManager）。
+cat > "$ROOTFS/usr/local/sbin/zt1-wifi-regdom.sh" <<'REGDOM_EOF'
+#!/bin/bash
+# 开机设置 WiFi 法规域（读 /etc/zerot1/config.env 的 WIFI_COUNTRY，缺省 US）。
+# 必须在 NetworkManager 启动前执行，否则首轮扫描仍看不到 DFS AP。
+set -u
+ENV_FILE=/etc/zerot1/config.env
+LOG=/var/log/zt1-wifi-regdom.log
+country=US
+if [ -r "$ENV_FILE" ]; then
+    # shellcheck disable=SC1090
+    . "$ENV_FILE"
+    country="${WIFI_COUNTRY:-US}"
+fi
+[ -n "$country" ] || exit 0
+if command -v iw >/dev/null 2>&1; then
+    iw reg set "$country" 2>/dev/null || {
+        echo "$(date '+%F %T') iw reg set $country 失败" >>"$LOG"
+        exit 0
+    }
+    echo "$(date '+%F %T') 已设置法规域 $country：$(iw reg get 2>/dev/null | sed -n '2p')" >>"$LOG"
+fi
+exit 0
+REGDOM_EOF
+chmod 755 "$ROOTFS/usr/local/sbin/zt1-wifi-regdom.sh"
+
+cat > "$ROOTFS/etc/systemd/system/zt1-wifi-regdom.service" <<'REGDOM_UNIT_EOF'
+[Unit]
+Description=zeroT1 WiFi regulatory domain setup (before NetworkManager scan)
+Documentation=file:///etc/zerot1/config.env
+DefaultDependencies=no
+After=local-fs.target
+Before=NetworkManager.service wpa_supplicant.service network-pre.target
+ConditionPathExists=/etc/zerot1/config.env
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/zt1-wifi-regdom.sh
+
+[Install]
+WantedBy=multi-user.target
+REGDOM_UNIT_EOF
+ln -sfn /etc/systemd/system/zt1-wifi-regdom.service \
+    "$ROOTFS/etc/systemd/system/multi-user.target.wants/zt1-wifi-regdom.service"
+log "[43-config-env] 已启用 zt1-wifi-regdom.service（开机设法规域 $WIFI_COUNTRY，5G DFS 必需）"
+
+cat > "$ROOTFS/etc/NetworkManager/conf.d/10-zt1-country.conf" <<NM_COUNTRY_EOF
+# zeroT1：射频国家码（DFS 信道必需；开机时由 zt1-wifi-regdom.service 先行设置）
+# 值来自构建时的 config.env WIFI_COUNTRY，默认 US（CN 域不扫 5GHz DFS，国内 5G 常不可见）。
+[global]
+wifi.country=$WIFI_COUNTRY
+NM_COUNTRY_EOF
+log "[43-config-env] 已写入 NetworkManager 10-zt1-country.conf（wifi.country=$WIFI_COUNTRY）"
 
 # ── 7. 安装 iw（设置射频国家码；没有它 brcmfmac 固件停在 world 域，5G 频段扫不到）──
 if [ -x "$ROOTFS/usr/sbin/iw" ] || [ -x "$ROOTFS/usr/bin/iw" ]; then
