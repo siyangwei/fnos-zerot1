@@ -19,24 +19,29 @@ cat > "$ROOTFS/usr/local/sbin/zt1-usb-role" <<'EOS'
 #!/bin/sh
 # zt1-usb-role —— 切换 zeroT1 唯一 Type-C 口的角色
 #
-#   auto   （默认）otg 版 dtb：接 PC 自动进 device 模式（adb 可用）
-#   device  强制 peripheral 版：接 PC 出 adb（与 auto 效果接近，tcpm 异常时更稳）
-#   host    host 版：Type-C 当主机用（U 盘/键鼠等），此时 adb 不可用
+#   auto   （默认）otg 版 dtb：接 PC 跑 adb（device 模式）
+#   device  强制 peripheral 版：接 PC 跑 adb（tcpm 异常时更稳）
+#   host    host 版：Type-C 当主机用（U 盘/键鼠等），adb 不可用
 #
-# 原理：定制 u-boot 的 bootcmd 固定加载 /dtb/rockchip/rk3588-aiot3588a.dtb
-# （直连引导，不走 extlinux/boot.scr），所以把对应变体覆盖到固定文件名即可。
-# 注意：切换后需要重启才生效（--reboot 可自动重启）。
+# 两种生效方式：
+#   持久：zt1-usb-role <角色> [--reboot]   覆盖 /boot 固定 dtb，重启后保持
+#   立即：zt1-usb-role <角色> --now        写 dwc3 debugfs 的 mode，本次开机立即生效，
+#                                          不改 dtb（重启后回到原角色）
+#
+# 原理备注：定制 u-boot 固定加载 /dtb/rockchip/rk3588-aiot3588a.dtb；
+# dwc3 支持运行时改 mode（/sys/kernel/debug/usb/fc000000.usb/mode），已实测可用。
 set -eu
 DTB_DIR=/boot/dtb/rockchip
 CUR=rk3588-aiot3588a.dtb
-AUTO=rk3588-aiot3588a.dtb.otg          # auto 母本
-AUTO_LEGACY=rk3588-aiot3588a.dtb.host  # 旧镜像里的 auto 母本名（内容同 otg）
-HOST=rk3588-aiot3588a-host.dtb          # host 变体
-DEV=rk3588-aiot3588a-usbdev.dtb         # device 变体
+AUTO=rk3588-aiot3588a.dtb.otg
+AUTO_LEGACY=rk3588-aiot3588a.dtb.host
+HOST=rk3588-aiot3588a-host.dtb
+DEV=rk3588-aiot3588a-usbdev.dtb
+MODE_FILE=/sys/kernel/debug/usb/fc000000.usb/mode
 
 same() { [ -f "$1" ] && [ -f "$DTB_DIR/$CUR" ] && cmp -s "$1" "$DTB_DIR/$CUR"; }
 
-cur_role() {
+dtb_role() {
   [ -f "$DTB_DIR/$CUR" ] || { echo unknown; return; }
   if same "$DTB_DIR/$HOST"; then echo host
   elif same "$DTB_DIR/$DEV"; then echo device
@@ -44,40 +49,58 @@ cur_role() {
   else echo unknown; fi
 }
 
-reboot_now() { [ "${1:-}" = "--reboot" ] && { sync; reboot; }; }
+rt_mode() { [ -r "$MODE_FILE" ] && cat "$MODE_FILE" || echo unknown; }
 
-case "${1:-status}" in
+set_rt() {
+  # $1 = host|device
+  [ -w "$MODE_FILE" ] || { echo "无法写 $MODE_FILE（内核未开 dwc3 debug）" >&2; return 1; }
+  echo "$1" > "$MODE_FILE"
+  sync
+  echo "已立即切到 $1 模式（本次开机生效；重启恢复 $2）"
+}
+
+[a="${1:-status}"]
+case "$a" in
   status)
-    r=$(cur_role)
-    case "$r" in
-      auto)   echo "Type-C 角色: auto/otg（接 PC: adb 设备模式；默认）" ;;
-      device) echo "Type-C 角色: device（接 PC: adb 设备模式，强制 peripheral）" ;;
-      host)   echo "Type-C 角色: host（Type-C 当主机用，adb 不可用）" ;;
-      *)      echo "Type-C 角色: 未知（$DTB_DIR/$CUR 缺失或无法识别）" ;;
+    echo "dtb 角色: $(dtb_role)    运行时 mode: $(rt_mode)"
+    case "$(dtb_role)" in
+      auto)   echo "  auto/otg（默认：接 PC 跑 adb）" ;;
+      device) echo "  device（强制 peripheral，接 PC 跑 adb）" ;;
+      host)   echo "  host（Type-C 当主机用，adb 不可用）" ;;
+      *)      echo "  未知（$DTB_DIR/$CUR 缺失或无法识别）" ;;
     esac
     exit 0 ;;
-  auto|otg)
-    if [ -f "$DTB_DIR/$AUTO" ]; then src="$DTB_DIR/$AUTO"
-    elif [ -f "$DTB_DIR/$AUTO_LEGACY" ]; then src="$DTB_DIR/$AUTO_LEGACY"
-    else echo "缺少 auto 母本 dtb（请重刷镜像）" >&2; exit 1; fi
-    want=auto ;;
-  device) src="$DTB_DIR/$DEV";  want=device ;;
-  host)   src="$DTB_DIR/$HOST"; want=host ;;
-  -h|--help)
-    echo "用法: zt1-usb-role [status|auto|device|host] [--reboot]"; exit 0 ;;
-  *)
-    echo "用法: zt1-usb-role [status|auto|device|host] [--reboot]" >&2; exit 2 ;;
+  auto|otg) want=auto ;;
+  device)   want=device ;;
+  host)     want=host ;;
+  -h|--help) echo "用法: zt1-usb-role [status|auto|device|host] [--reboot|--now]"; exit 0 ;;
+  *) echo "用法: zt1-usb-role [status|auto|device|host] [--reboot|--now]" >&2; exit 2 ;;
 esac
+opt="${2:-}"
 
-[ -f "$src" ] || { echo "缺少 $src（请重刷镜像）" >&2; exit 1; }
-if [ "$(cur_role)" != "$want" ]; then
-  cp -f "$src" "$DTB_DIR/$CUR"
-  sync
-  echo "已切换为 $want（重启后生效）"
-else
-  echo "当前已经是 $want，无需切换"
+# --now：只切运行时（写 debugfs），不动 dtb；auto/device 都等价于 device 模式
+if [ "$opt" = "--now" ]; then
+  if [ "$want" = host ]; then set_rt host "$(dtb_role)"; else set_rt device "$(dtb_role)"; fi
+  # 手动切换后 10 分钟内让 zt1-otg-autoswitch 不要自动干预
+  touch /run/zt1-usb-role.manual 2>/dev/null || true
+  exit 0
 fi
-reboot_now "${2:-}"
+
+case "$want" in
+  auto)   src=${AUTO:-}; [ -f "$DTB_DIR/$src" ] || src=$AUTO_LEGACY ;;
+  device) src=$DEV ;;
+  host)   src=$HOST ;;
+esac
+[ -f "$DTB_DIR/$src" ] || { echo "缺少 $DTB_DIR/$src（请重刷镜像）" >&2; exit 1; }
+
+if [ "$(dtb_role)" != "$want" ]; then
+  cp -f "$DTB_DIR/$src" "$DTB_DIR/$CUR"
+  sync
+  echo "已切换为 $want（重启后生效；也可加 --now 立即生效）"
+else
+  echo "dtb 已经是 $want"
+fi
+[ "$opt" = "--reboot" ] && { sync; reboot; }
 EOS
 chmod 0755 "$ROOTFS/usr/local/sbin/zt1-usb-role"
 

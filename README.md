@@ -53,7 +53,7 @@ output/fnos-aiot3588a-update-<日期>.img   （RKFW，upgrade_tool uf 烧录）
 | 音频 | ES8388：喇叭 + 耳机，插入耳机自动切输出（SARADC 检测）；首启即有声（MCLK 门控已修） |
 | 有线网络 | 千兆，实测 950 / 1015 Mbps 双向、md5 一致 |
 | 无线 | BCM43455（AP6256）2.4G/5G，5G 支持 DFS 信道（ch60/5300MHz）；蓝牙 BCM4345C5（可搜索/连接） |
-| USB | **adb over USB3.0 SuperSpeed**（bcdUSB 0x0320、5Gbps 链路）；唯一 Type-C（OTG）口可切换角色：`zt1-usb-role status\|auto\|device\|host`；2 个标准 USB-A（3.0/2.0）+ 6 路插针 USB 均正常（U 盘实测枚举并自动挂载） |
+| USB | **adb over USB3.0 SuperSpeed**（bcdUSB 0x0320、5Gbps 链路）；唯一 Type-C（OTG）口**自动识别 device/host**：插 U 盘约 1.5s 自动切主机并挂载、拔掉约 9s 自动回 device（adb 可用），也可 `zt1-usb-role status\|auto\|device\|host [--reboot\|--now]` 手动切；2 个标准 USB-A（3.0/2.0）+ 6 路插针 USB 均正常 |
 | 存储 | btrfs rootfs（固定 5.6GB，不自动改分区表）；剩余空间在 fnOS Web「存储空间」里建存储池；boot 分区 ext4 512MB（版本化内核 + `Image`/`uInitrd` 符号链接，与 fnOS 官方一致） |
 | 视频编解码 | 硬解：H.264（含 4K）、HEVC（含 4K）、VP9、VP8、MPEG-1/2/4、H.263、MJPEG；硬编：H.264、MJPEG |
 | GPU | Mali-G610 用户态库（fnOS 应用中心「Mali GPU Driver」可安装）：OpenCL/Vulkan/EGL 可用；XFCE 桌面固定 `AccelMethod=none`（不用 GL，避免 Mali libgbm 与 Xorg glamor 冲突） |
@@ -72,7 +72,9 @@ output/fnos-aiot3588a-update-<日期>.img   （RKFW，upgrade_tool uf 烧录）
 - HDMI 的 2K240 等高刷模式需要 FRL，本内核/固件未启用，会被拒绝；4K60 及以下（TMDS 范围）正常。
 - HDMI1 必须接在 VOP **VP2** 上（设备树已固定），否则与 eDP 同时启用时黑屏。
 - adb 传输速度约 18 MB/s，受厂商 adbd（android-tools 4.2.2）协议限制，链路本身 5Gbps。
-- Type-C（唯一 OTG 口）默认 `auto`＝设备模式（接 PC 跑 adb）；想当主机用（U 盘/键鼠）需 `sudo zt1-usb-role host --reboot`，用完 `sudo zt1-usb-role auto --reboot` 切回。原因：fnOS 内核的 tcpm/fusb302 一直 `waiting_for_supplier`，不会自动把 dwc3 切到 host，所以用两份 dtb 覆盖切换（host 变体实测可枚举 62GB USB3 U 盘）。
+- Type-C（唯一 OTG 口）**自动识别**：`zt1-otg-autoswitch` 守护进程每 0.5s 读 fusb302 `STATUS0`（`0x82`=CC 上挂着 sink 设备）+ xhci 设备表，自动写 dwc3 debugfs 的 `mode` 完成 device↔host 切换。原因：fnOS 内核的 typec/tcpm 不工作（无 partner、无状态机日志，`waiting_for_supplier`），内核不会自己切角色，所以用用户态补上这一层。
+- 手动/持久切换仍可用：`sudo zt1-usb-role host --now`（本次开机立即生效，不改 dtb）、`sudo zt1-usb-role host --reboot`（改 dtb 持久）；`status` 看当前 dtb 角色与运行时 mode。手动切后 10 分钟内自动切换不干预。
+- 注意：host 模式下 Type-C 只跑 USB2 480Mbps（该口 USB3 SS 通道在 host 模式下未走通）；大文件建议用 USB-A 3.0 口。
 - host 模式下该口只跑 USB2 480M（USB3 SS 通道未起来），大文件建议用 USB-A 3.0 口。
 - 安装「Mali GPU Driver」后，Mali 的 `libgbm/libEGL` 会通过 `/etc/ld.so.conf.d/00-aarch64-mali.conf`
   抢先于 Mesa 被加载；Xorg modesetting 的 glamor 此时会 `ScreenInit failed` 导致 lightdm 起不来。

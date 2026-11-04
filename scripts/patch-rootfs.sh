@@ -26,6 +26,8 @@
 #   52-ssh-guard.sh     ssh 自愈（定时确保 sshd 在跑）
 #   53-rk806-rstfix.sh  修「软件重启卡死」：开机把 RK806 SYS_CFG3.RST_FUN 置 MODE1
 #   55-usb-role.sh      Type-C host/device 切换命令（zt1-usb-role）+ adb gadget 自愈
+#   58-kernel-sync.sh   系统更新换内核后自动重编 eDP/PMIC/看门狗模块并切软链
+#   59-otg-autoswitch.sh Type-C(OTG) device/host 自动识别（用户态守护 + dwc3 debugfs）
 #   56-fast-reboot.sh   reboot 时写 CRU GLB_SRST_FST，跳过 PSCI+PMIC 的 ~90s 空档
 #   50-watchdog.sh       systemd RuntimeWatchdogSec + watchdog 工具
 #   60-desktop-apps.sh   nm-applet / blueman / chromium / alsa-utils + autostart
