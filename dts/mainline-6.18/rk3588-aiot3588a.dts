@@ -225,13 +225,21 @@
 		vin-supply = <&vcc_3v3_s3>;
 	};
 
+	/*
+	 * SD 卡 3.3V 电源，GPIO0_B7 控制。
+	 * 硬件极性：低电平 = 上电（低有效）。2026-11-04 由 Android 侧（BSP 6.1 r27）
+	 * 实机反证：官方 5.10 固件里该 regulator 从未被 enable、GPIO 保持低，卡工作正常；
+	 * 之前这里写成 `enable-active-high` + GPIO_ACTIVE_HIGH，mmc 驱动在
+	 * mmc_regulator_set_ocr() 里 regulator_enable() 会把 GPIO 拉高 = 断电，
+	 * 于是 ACMD41 永远等不到 ready（`Card stuck being busy` / `error -110`）。
+	 * 同时去掉 regulator-boot-on：让 mmc 驱动在 power up/off 时自己控制电源，
+	 * 卡才能拿到干净的上电复位（Android 侧同样删除了 always-on/boot-on）。
+	 */
 	vcc3v3_sd_s0: regulator-vcc3v3-sd-s0 {
 		compatible = "regulator-fixed";
-		enable-active-high;
-		gpio = <&gpio0 RK_PB7 GPIO_ACTIVE_HIGH>;
+		gpio = <&gpio0 RK_PB7 GPIO_ACTIVE_LOW>;
 		pinctrl-names = "default";
 		pinctrl-0 = <&sd_s0_pwr>;
-		regulator-boot-on;
 		regulator-name = "vcc3v3_sd_s0";
 		regulator-min-microvolt = <3300000>;
 		regulator-max-microvolt = <3300000>;
@@ -1610,8 +1618,9 @@
 	};
 
 	sdmmc {
+		/* GPIO0_B7 作为 SD 电源使能（低有效）：官方 5.10 dtb 为 func0 + pull-up */
 		sd_s0_pwr: sd-s0-pwr {
-			rockchip,pins = <0 RK_PB7 RK_FUNC_GPIO &pcfg_pull_none>;
+			rockchip,pins = <0 RK_PB7 RK_FUNC_GPIO &pcfg_pull_up>;
 		};
 	};
 
