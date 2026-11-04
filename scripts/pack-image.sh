@@ -23,7 +23,8 @@
 #   主线/友善内核都跑不了 fnOS 管理界面），由 scripts/prepare-boot.sh 准备。
 #
 # 用法：sudo ./scripts/pack-image.sh
-# 产物：output/fnos-aiot3588a-update-<日期>.img（RKFW 格式，upgrade_tool uf 烧录）
+# 产物：output/fnos-aiot3588a-v1.1-update-<日期>.img（RKFW 格式，upgrade_tool uf 烧录）
+#       文件名带硬件版本（AIOT-3588A 官方有 V1.1/V1.3 两个板型，本仓库适配 V1.1）
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -206,7 +207,7 @@ cd "$ASSETS_DIR/tools"
     tail -30 "$WORK_DIR/mkupdate.log" >&2; die "mkupdate 失败"
 }
 
-OUT_IMG="$OUTPUT_DIR/fnos-aiot3588a-update-$(date +%Y%m%d).img"
+OUT_IMG="$OUTPUT_DIR/${IMG_BASENAME}-$(date +%Y%m%d).img"
 cp -f update.img "$OUT_IMG"
 rm -f update.img
 cd - >/dev/null

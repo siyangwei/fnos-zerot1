@@ -118,7 +118,7 @@ jobs:
       - name: 上传 artifact
         uses: actions/upload-artifact@v4
         with:
-          name: fnos-aiot3588a-update
+          name: fnos-aiot3588a-v1.1-update
           path: |
             output/*.img.zst
             output/*.img.zst.sha256
@@ -147,9 +147,11 @@ jobs:
             echo "sha256sum -c SHA256SUMS              # 校验镜像"
             echo "sudo upgrade_tool_2.45 uf $base      # 一条命令烧录"
             echo '```'
+            echo ""
+            echo "> **适用硬件：视美泰 AIOT-3588A V1.1**（本仓库适配板型）。官方另有 V1.3 板型，硬件有差异、未做适配与验证，请勿直接刷 V1.3。"
           } > RELEASE_NOTES.md
           gh release create "$GITHUB_REF_NAME" \
             "$zst" "output/$base.zst.sha256" "output/SHA256SUMS" \
-            --title "fnOS for AIOT-3588A $GITHUB_REF_NAME" \
+            --title "fnOS for AIOT-3588A (V1.1) $GITHUB_REF_NAME" \
             --notes-file RELEASE_NOTES.md \
             --verify-tag

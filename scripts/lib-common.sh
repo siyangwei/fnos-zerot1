@@ -52,6 +52,11 @@ load_config_env "$CONFIG_ENV"
 WORK_DIR="${WORK_DIR:-$PROJECT_DIR/work}"
 OUTPUT_DIR="${OUTPUT_DIR:-$PROJECT_DIR/output}"
 IMAGE_DIR="${IMAGE_DIR:-$WORK_DIR/images}"
+
+# 板型/硬件版本：AIOT-3588A 官方有 V1.1 / V1.3 两个板型，本仓库只适配 V1.1
+BOARD_MODEL="${BOARD_MODEL:-AIOT-3588A}"
+BOARD_REV="${BOARD_REV:-V1.1}"
+IMG_BASENAME="${IMG_BASENAME:-fnos-aiot3588a-$(echo "$BOARD_REV" | tr "A-Z" "a-z")-update}"
 ROOTFS="${ROOTFS:-$PROJECT_DIR/work/rootfs}"
 
 ASSETS_DIR="$PROJECT_DIR/assets"

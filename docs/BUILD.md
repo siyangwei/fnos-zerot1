@@ -7,7 +7,7 @@
 ```bash
 cp config.env.example config.env   # 填 WiFi / root 密码（可留空）
 sudo ./scripts/build-all.sh        # 首次约 20~40 分钟（含下载约 2.1GB）
-sudo upgrade_tool_2.45 uf output/fnos-aiot3588a-update-YYYYMMDD.img
+sudo upgrade_tool_2.45 uf output/fnos-aiot3588a-v1.1-update-YYYYMMDD.img
 ```
 
 ## 1. 镜像由哪几块拼成
@@ -118,14 +118,14 @@ sudo env SKIP_ROOTFS=1 SKIP_BOOT=1 SKIP_DTS=1 \
      ROOTFS_IMG_REUSE=$PWD/work/fnos-update/rootfs.img ./scripts/build-all.sh
 ```
 
-产物 `output/fnos-aiot3588a-update-<日期>.img`，脚本末尾打印 sha256。
+产物 `output/fnos-aiot3588a-v1.1-update-<日期>.img`，脚本末尾打印 sha256。
 
 ## 5. 烧录与救砖
 
 ### 5.1 正常烧录（一条命令）
 
 ```bash
-sudo upgrade_tool_2.45 uf output/fnos-aiot3588a-update-YYYYMMDD.img
+sudo upgrade_tool_2.45 uf output/fnos-aiot3588a-v1.1-update-YYYYMMDD.img
 ```
 
 板子进入 MaskROM（按住 recovery 键上电，或 `reboot loader`）后执行。`uf` 会写入全部分区并自动复位。
@@ -163,15 +163,15 @@ sudo upgrade_tool_2.45 rd
 
 `build.yml` 构建完成后会把镜像做 zstd 压缩再上传（原始 6.1GB → 约 1.5~1.8GB）：
 
-- `fnos-aiot3588a-update-<日期>.img.zst`：整盘镜像
-- `fnos-aiot3588a-update-<日期>.img.zst.sha256`：压缩包校验和（下载后先验）
+- `fnos-aiot3588a-v1.1-update-<日期>.img.zst`：整盘镜像
+- `fnos-aiot3588a-v1.1-update-<日期>.img.zst.sha256`：压缩包校验和（下载后先验）
 - `SHA256SUMS`：解压后镜像本体的校验和
 
 ```bash
-sha256sum -c fnos-aiot3588a-update-*.img.zst.sha256
-unzstd fnos-aiot3588a-update-*.img.zst
+sha256sum -c fnos-aiot3588a-v1.1-update-*.img.zst.sha256
+unzstd fnos-aiot3588a-v1.1-update-*.img.zst
 sha256sum -c SHA256SUMS
-sudo upgrade_tool_2.45 uf fnos-aiot3588a-update-*.img
+sudo upgrade_tool_2.45 uf fnos-aiot3588a-v1.1-update-*.img
 ```
 
 推 `v*` 标签时这三个文件会直接挂到 GitHub Release 上。

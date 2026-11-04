@@ -2,11 +2,16 @@
 
 **fnOS（飞牛 NAS / fnNAS）for 视美泰 AIOT-3588A（RK3588 核心板，代号 zeroT1）**
 
+> **硬件版本：本仓库只适配 AIOT-3588A *V1.1* 板型。**
+> AIOT-3588A 官方有 **V1.1** 与 **V1.3** 两个板型（分别对应 2023-06-09 与 2024-03-14 两版官方固件，
+> 硬件规格书也不同）。本项目的 dtb、供电/GPIO、eDP/HDMI/USB 配置都以 **V1.1** 实板为准，
+> 镜像文件名、Release 说明里均标注 `v1.1`。**V1.3 未做适配与验证，请勿直接刷 V1.3 板子。**
+
 把 [fnOS](https://www.fnnas.com/) 移植到视美泰 AIOT-3588A 板子上，产出 **Rockchip 格式的全量 `update.img`**，
 一条命令烧录：
 
 ```bash
-sudo upgrade_tool_2.45 uf fnos-aiot3588a-update-YYYYMMDD.img
+sudo upgrade_tool_2.45 uf fnos-aiot3588a-v1.1-update-YYYYMMDD.img
 ```
 
 除烧录外全部流程（拉取底稿、准备内核与 initramfs、编译设备树、组装各分区、打包）都可由
@@ -28,7 +33,7 @@ fnOS 官方内核 6.18.18-trim（vmlinuz + uInitrd + modules，含 trimafs/zfs/r
         +
 定制 u-boot（预编译 assets/uboot.img：修千兆网口 CPLL、补 FS_EXT4、直连引导）
         ↓
-output/fnos-aiot3588a-update-<日期>.img   （RKFW，upgrade_tool uf 烧录）
+output/fnos-aiot3588a-v1.1-update-<日期>.img   （RKFW，upgrade_tool uf 烧录）
 ```
 
 **为什么用 fnOS 官方内核而不是主线/友善内核**：fnOS 管理界面（trim 系列服务）依赖
@@ -124,7 +129,7 @@ config.env.example      构建配置模板（复制为 config.env 后填写；�
 ### 1. 烧录
 
 ```bash
-sudo upgrade_tool_2.45 uf fnos-aiot3588a-update-YYYYMMDD.img
+sudo upgrade_tool_2.45 uf fnos-aiot3588a-v1.1-update-YYYYMMDD.img
 ```
 
 `uf` 会自带 loader、写入全部分区并自动复位。板子进 MaskROM 后执行即可；若 `uf` 失败，
@@ -169,7 +174,7 @@ sudo env SKIP_ROOTFS=1 SKIP_BOOT=1 ./scripts/build-all.sh
 sudo env SKIP_ROOTFS=1 SKIP_BOOT=1 SKIP_DTS=1 ./scripts/build-all.sh
 ```
 
-构建产物在 `output/fnos-aiot3588a-update-<日期>.img`，脚本会打印 sha256。
+构建产物在 `output/fnos-aiot3588a-v1.1-update-<日期>.img`，脚本会打印 sha256。
 
 ### 4. 系统更新与内核同步（重要）
 
@@ -207,16 +212,16 @@ zt1-kernel-sync --disable    # 关掉自动跟随
 - 手动触发（Actions → Build image → Run workflow），或推送 `v*` 标签自动创建 Release；
 - 全程在 Ubuntu runner 上完成：下载底稿/内核/源码 → 构建 → **zstd 压缩** → 上传 artifact（tag 时发 Release）；
 - 产物有两个文件（约 1.5~1.8GB 压缩包，比原始 6.1GB 小很多）：
-  - `fnos-aiot3588a-update-<日期>.img.zst` —— 压缩后的整盘镜像
-  - `fnos-aiot3588a-update-<日期>.img.zst.sha256` —— 压缩包自身的校验和（下载后先验）
+  - `fnos-aiot3588a-v1.1-update-<日期>.img.zst` —— 压缩后的整盘镜像
+  - `fnos-aiot3588a-v1.1-update-<日期>.img.zst.sha256` —— 压缩包自身的校验和（下载后先验）
   - `SHA256SUMS` —— 解压后镜像本体的校验和
 - 下载后：
 
   ```bash
-  sha256sum -c fnos-aiot3588a-update-*.img.zst.sha256   # 校验压缩包
-  unzstd fnos-aiot3588a-update-*.img.zst                # 解压得到 .img
+  sha256sum -c fnos-aiot3588a-v1.1-update-*.img.zst.sha256   # 校验压缩包
+  unzstd fnos-aiot3588a-v1.1-update-*.img.zst                # 解压得到 .img
   sha256sum -c SHA256SUMS                               # 校验镜像本体
-  sudo upgrade_tool_2.45 uf fnos-aiot3588a-update-*.img # 烧录
+  sudo upgrade_tool_2.45 uf fnos-aiot3588a-v1.1-update-*.img # 烧录
   ```
 
 - WiFi 密码、root 密码通过 **Actions Secrets**（`WIFI_SSID` / `WIFI_PASSWORD` /
