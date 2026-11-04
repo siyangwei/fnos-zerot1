@@ -8,8 +8,17 @@
  *       这里直接把 dwc3 固定成 host 并禁用 fusb302，绕开 role-switch。
  *       该模式下列 USB 设备口当主机用，adb 不可用（要 adb 请切回 auto/device）。
  *
- * 切换方式：zt1-usb-role host（改 /boot 下固定 dtb 名 + 重启）。
- * 实测（2026-11-04，fnOS 6.18.18.c1145-trim）：插 62GB USB3 U 盘可枚举成 /dev/sda。
+ * 切换方式：
+ *   zt1-usb-role host --reboot   持久（把本变体写成固定 dtb 名并重启）
+ *   zt1-usb-role host --now      本次开机立即生效（写 dwc3 debugfs 的 mode，不改 dtb）
+ *   zt1-usb-role auto            恢复默认（auto/otg，接 PC 跑 adb）
+ *   插入设备后也可由 zt1-otg-autoswitch 守护进程自动完成同样的切换。
+ *
+ * 实测（2026-11-05，fnOS 1.2.1000 / 6.18.18.c1196-trim）：
+ *   插 62GB U 盘可枚举成 /dev/sda 并自动挂载；但本变体禁用 usbc0 后
+ *   USB3 SuperSpeed 通道没有起来，只跑 USB2 480Mbps（厂商 Ubuntu 同口
+ *   在 host 模式下可达 5Gbps，说明硬件支持，差异在 phy/typec 配置）。
+ *   需要高速存储请用标准 USB-A 3.0 口。
  */
 #include "rk3588-aiot3588a.dts"
 

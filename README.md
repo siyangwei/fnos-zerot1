@@ -53,8 +53,10 @@ output/fnos-aiot3588a-update-<日期>.img   （RKFW，upgrade_tool uf 烧录）
 | 音频 | ES8388：喇叭 + 耳机，插入耳机自动切输出（SARADC 检测）；首启即有声（MCLK 门控已修） |
 | 有线网络 | 千兆，实测 950 / 1015 Mbps 双向、md5 一致 |
 | 无线 | BCM43455（AP6256）2.4G/5G，5G 支持 DFS 信道（ch60/5300MHz）；蓝牙 BCM4345C5（可搜索/连接） |
-| USB | **adb over USB3.0 SuperSpeed**（bcdUSB 0x0320、5Gbps 链路）；唯一 Type-C（OTG）口**自动识别 device/host**：插 U 盘约 1.5s 自动切主机并挂载、拔掉约 9s 自动回 device（adb 可用），也可 `zt1-usb-role status\|auto\|device\|host [--reboot\|--now]` 手动切；2 个标准 USB-A（3.0/2.0）+ 6 路插针 USB 均正常 |
-| 存储 | btrfs rootfs（固定 5.6GB，不自动改分区表）；剩余空间在 fnOS Web「存储空间」里建存储池；boot 分区 ext4 512MB（版本化内核 + `Image`/`uInitrd` 符号链接，与 fnOS 官方一致） |
+| USB | **adb over USB3.0 SuperSpeed**（bcdUSB 0x0320、5Gbps 链路）；唯一 Type-C（OTG）口**自动识别 device/host**：插 U 盘约 1.5s 自动切主机并挂载（host 模式为 USB2 480Mbps）、拔掉约 9s 自动回 device（adb 可用），也可 `zt1-usb-role status\|auto\|device\|host [--reboot\|--now]` 手动切；2 个标准 USB-A（3.0/2.0）+ 6 路插针 USB 均正常 |
+| 存储 | btrfs rootfs（固定 5.6GB；**已用 dpkg-divert + `zt1-rootfs-guard` 永久禁止 fnOS 更新后自动扩容**）；剩余空间在 fnOS Web「存储空间」里建存储池；boot 分区 ext4 512MB（版本化内核 + `Image`/`uInitrd` 符号链接，与 fnOS 官方一致） |
+| SD/TF 卡 | 板载 SD 控制器可用：**SDR104 198MHz**，实测顺序读 **86.9 MB/s**（`GPIO0_B7` 电源极性已修） |
+| 系统更新 | Web「更新和还原」可正常更新（已验证 1.1.31 → 1.2.1000、内核 c1196）；`zt1-kernel-sync` 自动重编板级模块、切内核并自动重启一次 |
 | 视频编解码 | 硬解：H.264（含 4K）、HEVC（含 4K）、VP9、VP8、MPEG-1/2/4、H.263、MJPEG；硬编：H.264、MJPEG |
 | GPU | Mali-G610 用户态库（fnOS 应用中心「Mali GPU Driver」可安装）：OpenCL/Vulkan/EGL 可用；XFCE 桌面固定 `AccelMethod=none`（不用 GL，避免 Mali libgbm 与 Xorg glamor 冲突） |
 | NPU | **RK3588 NPU 可用**：`rknpu 0.9.8` 正常 probe（`/sys/class/devfreq/fdab0000.npu`、`/sys/kernel/debug/rknpu/{load,freq,power}`）；实测 `librknnrt 2.3.2` + fnOS「飞牛AI引擎」`face_det.rk3588.rknn` 640x640 单帧 **145 ms**、输出 12800/3200/800 三个张量 |
@@ -74,8 +76,8 @@ output/fnos-aiot3588a-update-<日期>.img   （RKFW，upgrade_tool uf 烧录）
 - adb 传输速度约 18 MB/s，受厂商 adbd（android-tools 4.2.2）协议限制，链路本身 5Gbps。
 - Type-C（唯一 OTG 口）**自动识别**：`zt1-otg-autoswitch` 守护进程每 0.5s 读 fusb302 `STATUS0`（`0x82`=CC 上挂着 sink 设备）+ xhci 设备表，自动写 dwc3 debugfs 的 `mode` 完成 device↔host 切换。原因：fnOS 内核的 typec/tcpm 不工作（无 partner、无状态机日志，`waiting_for_supplier`），内核不会自己切角色，所以用用户态补上这一层。
 - 手动/持久切换仍可用：`sudo zt1-usb-role host --now`（本次开机立即生效，不改 dtb）、`sudo zt1-usb-role host --reboot`（改 dtb 持久）；`status` 看当前 dtb 角色与运行时 mode。手动切后 10 分钟内自动切换不干预。
-- 注意：host 模式下 Type-C 只跑 USB2 480Mbps（该口 USB3 SS 通道在 host 模式下未走通）；大文件建议用 USB-A 3.0 口。
-- host 模式下该口只跑 USB2 480M（USB3 SS 通道未起来），大文件建议用 USB-A 3.0 口。
+- 注意：Type-C 在 **host 模式下只跑 USB2 480Mbps**（该口 USB3 SS 通道未起来；厂商 Ubuntu 用同一颗 PHY
+  在 host 模式可达 5Gbps，说明硬件支持、差异在 typec/phy 配置），大文件建议用标准 USB-A 3.0 口。
 - 安装「Mali GPU Driver」后，Mali 的 `libgbm/libEGL` 会通过 `/etc/ld.so.conf.d/00-aarch64-mali.conf`
   抢先于 Mesa 被加载；Xorg modesetting 的 glamor 此时会 `ScreenInit failed` 导致 lightdm 起不来。
   镜像已预置 `/etc/X11/xorg.conf.d/20-zt1-accel.conf`（`AccelMethod=none`）避开该问题，桌面不受影响。
@@ -134,6 +136,7 @@ sudo upgrade_tool_2.45 uf fnos-aiot3588a-update-YYYYMMDD.img
 - 网线/WiFi 任一能上网即可；**出厂镜像没有任何普通用户**，浏览器访问 `http://<板子IP>` 走 fnOS
   初始化向导弹出「开始使用 fnOS」，注册的管理员就是后续登录账号。
 - 设备名初始为 `fnnas`，由向导设置。
+- **默认 root 密码是 `root`**（与 fnOS 官方镜像一致；控制台/串口/SSH 都可用），首次登录后建议用 `passwd root` 改掉。
 - 默认调试通道：USB-C 接 PC 出现 `2207:0006`（识别为 `zeroT1 fnOS`），`adb shell` 直连；
   串口 `ttyS2` 波特率 1500000（8N1，需 `stty raw` 才不吞字符）。
 

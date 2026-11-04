@@ -183,3 +183,11 @@ sudo upgrade_tool_2.45 uf fnos-aiot3588a-update-*.img
 - [VPU.md](VPU.md) —— MPP/RGA 编解码启用记录与 AV1 结论
 - [ADB-USB3.md](ADB-USB3.md) —— adb SuperSpeed 的 FunctionFS v2 shim
 - [CONFIG.md](CONFIG.md) —— config.env 变量与 CI Secrets
+
+
+## 附：rootfs 自动扩容已被禁用
+
+fnOS 的 `trim` 包 postinst 每次升级都会 `systemctl enable resize-rootfs.service`，
+该服务会把 rootfs 扩到 28GB、吃掉留给存储池的空间。本镜像在 `patches/rootfs/90-rootfs-resize.sh`
+里用 **dpkg-divert + stub + `zt1-rootfs-guard` 开机自愈** 彻底关掉它（原脚本保留在
+`/usr/trim/bin/resize-rootfs.sh.distrib`，用 `dpkg-divert --remove --rename` 可恢复官方行为）。

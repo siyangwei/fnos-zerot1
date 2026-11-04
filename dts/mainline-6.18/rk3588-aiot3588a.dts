@@ -8,11 +8,15 @@
  *       （RK BSP 6.1 的 rk3588-aiot3588a.dts），写法遵循上游 mainline 6.18。
  *
  * 与 NanoPC-T6 的主要差异（也是为什么不能直接用 nanopc-t6.dtb）：
- *  1. 主显示是 eDP 面板（1920x1080p60，139MHz），不是 HDMI0：
+ *  1. 主显示是 eDP 面板（1920x1080，标称 60Hz；上游 VOP 只能给 132MHz，
+ *     实际刷新率 57.12Hz，详见 panel-timing 注释），不是 HDMI0：
  *     - eDP PHY = hdptxphy0（fed60000），HDMI0 与 eDP 共用这一颗 PHY，本板未用 HDMI0
- *     - eDP 控制器 edp0 -> VOP VP1，HDMI1 -> VOP VP2
+ *     - eDP 控制器 edp0 -> VOP VP1；HDMI1 -> VOP VP2（不能走 VP0，理由见下）
  *     - 面板：GPIO2_C5 使能，vcc3v3_lcd_edp 供电，PWM1 背光（GPIO2_C1 使能，周期 20000ns）
- *  2. HDMI 输出走 HDMI1（hdptxphy1 / fed70000，GPIO4_A0 使能）-> VOP VP0
+ *  2. HDMI 输出走 HDMI1（hdptxphy1 / fed70000，GPIO4_A0 使能）-> VOP **VP2**
+ *     - 2026-11-02 实测：HDMI1 走 VP0 时，只要 eDP 同时启用（eDP 占 VP1），
+ *       HDMI 侧 PHY/时钟全部正常但显示器黑屏；改接 VP2 后双屏同时输出正常。
+ *       （只开 eDP、HDMI 不接时 VP0 也能亮，属视频口复用冲突，不能作为定论。）
  *  3. HDMI IN：hdmi_receiver（fdee0000），HPD 检测脚 GPIO1_PD5
  *  4. 音频 codec 是 ES8388（i2c7 0x1b，i2s0_8ch），耳机检测 GPIO4_C2，
  *     扬声器功放使能 GPIO4_A3（低有效，用 gpio-hog 常开）

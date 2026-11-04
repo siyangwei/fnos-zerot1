@@ -21,13 +21,13 @@ cp config.env.example config.env   # 填自己的 WiFi 与 root 密码（可留�
 | `WIFI_COUNTRY` | `CN` | 射频国家码（失败不影响连接） |
 | `ENABLE_WIFI` | `1` | `0` = 不启用首启 WiFi 脚本 |
 | `ENABLE_SSH` | `1` | `1` = 开机自启 sshd 且允许 root 密码登录 |
-| `ROOT_PASSWORD` | 空 | root 密码（SSH + 串口 console 登录用）；空则保持底稿默认 |
+| `ROOT_PASSWORD` | 空 | root 密码（SSH + 串口 console 登录用）；**留空 = 默认 `root`**（与 fnOS 官方镜像一致） |
 | `DEVICE_HOSTNAME` | 空 | 空 = 出厂态 `fnnas`（由 Web 向导设置）；填了则固定 |
 | `SKIP_XFCE` | `0` | `1` = 跳过 XFCE 桌面（纯 NAS） |
 | `ENABLE_ADB` | `1` | `1` = 打开 USB adb（USB3 SuperSpeed） |
 | `DEBUG_ETH_IP` | 空 | 有线调试静态 IP（如 `192.168.1.100/24`），空 = 不配置 |
 | `DEBUG_ETH_IFACE` | `eth0` | 上面的网卡名 |
-| `USB_ROLE` | `host` | Type-C 默认角色；`device` = 固定 device 变体 dtb |
+| `USB_ROLE` | `auto` | Type-C 默认角色：`auto`（默认，device+自动判断插设备）、`device`（固定 peripheral）、`host`（固定主机） |
 
 ## 三个消费点
 
@@ -49,18 +49,24 @@ cp config.env.example config.env   # 填自己的 WiFi 与 root 密码（可留�
 |---|---|
 | `WIFI_SSID` / `WIFI_PASSWORD` | 首启自动连接的 WiFi |
 | `WIFI_FALLBACK_SSID` / `WIFI_FALLBACK_PASSWORD` | 备用 WiFi（可只填一个） |
-| `ROOT_PASSWORD` | root 密码 |
+| `ROOT_PASSWORD` | root 密码（留空 = `root`） |
 
 Secret 留空时对应项保持 `config.env.example` 里的空值（镜像仍可用，只是不会自动连 WiFi、
-root 密码保持底稿默认）。**不要**把真实密码写进 `config.env.example` 或任何仓库文件。
+root 密码回落到默认 `root`）。**不要**把真实密码写进 `config.env.example` 或任何仓库文件。
 
 ## 运行时切换（设备上）
 
 ```bash
-zt1-usb-role status            # 当前 Type-C 角色
-zt1-usb-role device --reboot   # 切成 device（覆盖 /boot/dtb/rockchip/rk3588-aiot3588a.dtb）
-zt1-usb-role host --reboot     # 切回 host/otg
+zt1-usb-role status              # 当前角色（dtb 角色 + 运行时 mode）
+zt1-usb-role auto                # 默认：dtb 用 auto/otg（device + adb，插设备由 autoswitch 自动切 host）
+zt1-usb-role device --reboot     # 固定 device（adb 常开）
+zt1-usb-role host --reboot       # 固定 host（adb 不可用，插 U 盘/键鼠）
+zt1-usb-role host --now          # 本次开机立即切 host，不改 dtb（重启回原角色）
 ```
+
+镜像默认带 `zt1-otg-autoswitch` 守护进程：`auto` 角色下每 0.5s 检查 fusb302 `STATUS0` 与 xhci 设备表，
+插上 sink 设备（U 盘等）自动切 host，拔掉约 9s 自动回 device（恢复 adb）。手动 `--now` 切换后
+10 分钟内 autoswitch 不干预。
 
 > 注意：定制 u-boot 直接加载固定路径的 dtb，不读 `extlinux.conf`，所以角色切换是**覆盖该 dtb 文件**，
 > 而不是像旧版那样改 `extlinux.conf` 的 `fdt` 行。
