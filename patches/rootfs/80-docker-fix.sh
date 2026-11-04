@@ -42,3 +42,12 @@ cat > "$ROOTFS/etc/docker/daemon.json" <<'EOF'
 EOF
 
 echo "[80-docker] 完成: ExecStop 修复 + 4 个国内 mirror"
+
+# 问题 3（docker.socket failed）：
+#   fnOS 镜像同时 enable docker.service 和 docker.socket；docker.service 先起来时
+#   守护进程自己创建 /run/docker.sock，socket 单元再 bind 会 EADDRINUSE 被 systemd
+#   标记 failed（首次开机 docker 因存储空间未建还会反复失败，被 start-limit 限流）。
+#   修法：去掉 sockets.target.wants 里的 docker.socket 软链，只保留 docker.service。
+for d in "$ROOTFS/etc/systemd/system/sockets.target.wants" "$ROOTFS/usr/lib/systemd/system/sockets.target.wants" "$ROOTFS/lib/systemd/system/sockets.target.wants"; do
+    [ -L "$d/docker.socket" ] && rm -f "$d/docker.socket" && echo "[80-docker-fix] 已移除 docker.socket 的 enable 软链"
+done

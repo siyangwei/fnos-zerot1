@@ -59,7 +59,7 @@ set_rt() {
   echo "已立即切到 $1 模式（本次开机生效；重启恢复 $2）"
 }
 
-[a="${1:-status}"]
+a="${1:-status}"
 case "$a" in
   status)
     echo "dtb 角色: $(dtb_role)    运行时 mode: $(rt_mode)"
