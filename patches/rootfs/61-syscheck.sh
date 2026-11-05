@@ -111,7 +111,12 @@ else
 fi
 echo "  eMMC: $(cat /sys/block/mmcblk0/device/name 2>/dev/null || echo -) $(blockdev --getsize64 /dev/mmcblk0 2>/dev/null | awk '{printf "%.1fG", $1/1073741824}')"
 FS=$(df -h /fs 2>/dev/null | awk 'NR==2{print $3"/"$2}')
-if [ -n "$FS" ] && [ "${FS%%/*}" != "0" ]; then ok "fnOS 存储空间 /fs: $FS"; else warn "fnOS 存储空间 /fs 未创建（Web 建好后才能用 Docker/影视）"; fi
+if mount 2>/dev/null | grep -q " on /fs type trimafs"; then
+  ok "fnOS trimafs /fs 已挂载"
+elif [ -n "$FS" ] && [ "${FS%%/*}" != "0" ]; then ok "fnOS 存储空间 /fs: $FS"
+else warn "fnOS 存储空间 /fs 未创建（Web 建好后才能用 Docker/影视）"; fi
+VOL1=$(df -h /vol1 2>/dev/null | awk 'NR==2{print $3"/"$2}')
+[ -n "$VOL1" ] && out "  存储池 /vol1: $VOL1"
 if systemctl is-active --quiet docker 2>/dev/null; then ok "Docker active ($(docker info 2>/dev/null | awk '/Storage Driver/{print $3}'))"; else warn "Docker 未运行（先建存储空间）"; fi
 if systemctl is-active --quiet resize-rootfs 2>/dev/null; then bad "resize-rootfs 在运行（自动扩容未被禁用）"; else ok "resize-rootfs 未运行（guard 正常）"; fi
 
