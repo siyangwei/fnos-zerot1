@@ -39,7 +39,7 @@ cat > "$ROOTFS/usr/local/sbin/zt1-otg-autoswitch" <<'EOS'
 set -u
 CONF=/etc/zerot1/otg.conf
 AUTOSWITCH=1
-POLL_MS=500
+POLL_MS=200
 [ -r "$CONF" ] && . "$CONF"
 [ "$AUTOSWITCH" = "1" ] || exit 0
 
@@ -92,7 +92,7 @@ while :; do
     else
       sink_streak=0
     fi
-    if [ "$sink_streak" -ge 3 ]; then
+    if [ "$sink_streak" -ge 2 ]; then
       sink_streak=0
       if echo host > "$MODE_FILE" 2>/dev/null; then
         host_since=$(now); log "device→host（STATUS0=$st0）"
@@ -102,12 +102,12 @@ while :; do
     sink_streak=0
     [ "$host_since" -eq 0 ] && host_since=$(now)
     n=$(host_dev_count)
-    if [ "$n" -eq 0 ] && [ $(( $(now) - host_since )) -ge 6 ]; then
+    if [ "$n" -eq 0 ] && [ $(( $(now) - host_since )) -ge 3 ]; then
       empty_streak=$((empty_streak + 1))
     else
       empty_streak=0
     fi
-    if [ "$empty_streak" -ge 4 ]; then
+    if [ "$empty_streak" -ge 2 ]; then
       empty_streak=0; host_since=0
       if echo device > "$MODE_FILE" 2>/dev/null; then
         log "host→device（无设备，STATUS0=$st0）"
@@ -140,7 +140,7 @@ cat > "$ROOTFS/etc/zerot1/otg.conf" <<'EOS'
 # 1 = 启用（默认）：插设备自动切 host，拔出自动切回 device（adb 可用）
 AUTOSWITCH=1
 # 轮询间隔（毫秒）
-POLL_MS=500
+POLL_MS=200
 EOS
 chmod 755 "$ROOTFS/usr/local/sbin/zt1-otg-autoswitch"
 chmod 644 "$ROOTFS/etc/systemd/system/zt1-otg-autoswitch.service" "$ROOTFS/etc/zerot1/otg.conf"
