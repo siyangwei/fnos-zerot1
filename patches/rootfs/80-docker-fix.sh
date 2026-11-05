@@ -54,3 +54,10 @@ for d in "$ROOTFS/etc/systemd/system/sockets.target.wants" "$ROOTFS/usr/lib/syst
         echo "[80-docker-fix] 已移除 docker.socket 的 enable 软链"
     fi
 done
+
+# 问题 4（fnOS 更新后 docker.socket 又被 enable）：
+#   fnOS 的 trim 包 postinst / systemd preset 会重新创建 sockets.target.wants/docker.socket
+#   软链，导致更新后再次出现 "docker.socket failed"。这里直接用 mask 固化（/etc 下指向
+#   /dev/null 的软链不会被包升级清除），docker.service 本身不 Require 它，不受影响。
+ln -sfn /dev/null "$ROOTFS/etc/systemd/system/docker.socket"
+echo "[80-docker] 已 mask docker.socket（更新后也不会再 failed）"

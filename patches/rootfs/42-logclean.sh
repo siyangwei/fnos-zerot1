@@ -55,6 +55,9 @@ cat > "$ROOTFS/etc/systemd/system/eventlogger_service.service.d/10-boot-safety.c
 StartLimitIntervalSec=0
 
 [Service]
+# ★locale 是 SEGV 的直接触发点（2026-11-05 复现：1.2.1000 上仍会 SEGV）。
+# 固定 C locale 后进程正常工作；缺这一行时日志应用会一直报「该App未安装或未启动」。
+Environment=LANG=C LC_ALL=C
 ExecStartPre=/bin/sleep 10
 RestartSec=10
 EOF

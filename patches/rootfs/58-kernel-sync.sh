@@ -69,6 +69,20 @@ log() { echo "[$(date '+%F %T')] $*" >> "$LOG"; }
 say() { log "$*"; echo "$*"; }
 die() { log "失败: $*"; echo "失败: $*" >&2; exit 1; }
 
+# 缺 headers/模块目录时不要一次失败就放弃：fnOS 的 dpkg 是先装 image 再装 headers，
+# 而 /boot 变化可能在 headers 装好之前触发本脚本。这里 60s 后自动重试（最多 5 次）。
+retry_later() {
+    local n
+    n="$(cat "$STATE/retry" 2>/dev/null || echo 0)"
+    if [ "${AUTOMODE:-0}" = 1 ] && [ "$n" -lt 5 ]; then
+        n=$((n + 1)); echo "$n" > "$STATE/retry"
+        systemd-run --on-active=60 --collect --unit="zt1-ksync-retry-$$" \
+            /usr/local/sbin/zt1-kernel-sync --auto >>"$LOG" 2>&1 \
+            || log "警告: 调度重试失败（请稍后手动执行 zt1-kernel-sync --force）"
+        log "将在 60s 后自动重试（第 $n 次，最多 5 次）"
+    fi
+}
+
 case "${1:-}" in
   --enable)  sed -i 's/^AUTOSYNC=.*/AUTOSYNC=1/' "$CONF" 2>/dev/null || echo 'AUTOSYNC=1' >> "$CONF"; say "已启用内核自动同步"; exit 0 ;;
   --disable) sed -i 's/^AUTOSYNC=.*/AUTOSYNC=0/' "$CONF" 2>/dev/null || echo 'AUTOSYNC=0' >> "$CONF"; say "已关闭内核自动同步"; exit 0 ;;
@@ -102,14 +116,35 @@ NEW="$(ls -1 "$BOOT"/vmlinuz-* 2>/dev/null | sed -n 's#.*/vmlinuz-##p' | sort -V
 NEWF="$BOOT/vmlinuz-$NEW"
 [ -f "$NEWF" ] || die "$NEWF 不存在"
 
-if [ "$(md5sum < "$NEWF" | cut -d' ' -f1)" = "$(md5sum < "$CUR" | cut -d' ' -f1)" ]; then
-    log "已是最新内核 $NEW（Image -> $(basename "$CUR")）"; exit 0
+# ★判断是否真的需要同步：不能只看 Image 是否已指向新内核。
+# 2026-11-05 实测：fnOS 内核包的 postinst 自己会把 /boot/Image 软链切到新内核，
+# 而我们的 eDP 补丁模块/initrd 还是官方的 ⇒ 新内核起来后 eDP 黑屏（只有背光）。
+# 因此这里额外校验「目标内核的 analogix_dp.ko 是否含我们的 zt1_ 补丁参数」+
+# 「/boot/uInitrd-<ver> 是否存在」，缺任意一项都要重做一遍（重编模块 + 重生成 initrd）。
+KDIR="/lib/modules/$NEW"
+patched_module() {
+    local m="$KDIR/$MODREL/analogix_dp.ko"
+    [ -f "$m" ] && strings "$m" 2>/dev/null | grep -q 'zt1_bpc'
+}
+SAME=0
+if [ -n "${CUR:-}" ] && [ -f "$CUR" ] && \
+   [ "$(md5sum < "$NEWF" | cut -d' ' -f1)" = "$(md5sum < "$CUR" | cut -d' ' -f1)" ]; then
+    SAME=1
+fi
+if [ "$SAME" = 1 ] && patched_module && [ -f "$BOOT/uInitrd-$NEW" ]; then
+    log "已是最新内核 $NEW（Image -> $(basename "$CUR")，补丁模块与 uInitrd 均已就绪）"; exit 0
+fi
+if [ "$SAME" = 1 ]; then
+    log "Image 已指向 $NEW，但补丁模块或 uInitrd 未就绪（fnOS 自己改的软链？），补做同步"
 fi
 
-log "发现新内核 $NEW（当前 Image -> $(basename "$CUR")），开始同步"
-KDIR="/lib/modules/$NEW"; [ -d "$KDIR" ] || die "缺少 /lib/modules/$NEW"
+log "发现新内核 $NEW（当前 Image -> $(basename "${CUR:-无}")），开始同步"
+[ -d "$KDIR" ] || die "缺少 /lib/modules/$NEW"
 HB="$KDIR/build"; [ -d "$HB" ] || HB="/usr/src/linux-headers-$NEW"
-[ -d "$HB" ] || die "缺少 linux-headers-$NEW，不切换（避免新内核缺 eDP 修复）"
+if [ ! -d "$HB" ]; then
+    retry_later
+    die "缺少 linux-headers-$NEW，不切换（避免新内核缺 eDP 修复）"
+fi
 [ -d "$DST" ] || die "缺少 $DST"
 
 # 空间检查（initrd + uInitrd 约 40MB）
@@ -188,6 +223,7 @@ echo "$(basename "$CUR")" > "$STATE/previous"
 ln -sfn "vmlinuz-$NEW" "$BOOT/Image"
 ln -sfn "uInitrd-$NEW" "$BOOT/uInitrd"
 sync
+rm -f "$STATE/retry"
 say "内核已切换：Image -> vmlinuz-$NEW，uInitrd -> uInitrd-$NEW（旧: $(cat "$STATE/previous")，回滚: zt1-kernel-sync --rollback）"
 
 # ---- 4. 自动模式且允许时，自动重启一次让新内核生效 ----
