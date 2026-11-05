@@ -57,6 +57,21 @@ host_since=0
 now() { date +%s; }
 log() { echo "$(date '+%F %T') $*" >> "$LOG"; }
 
+VBUS_DR=0xfec50000
+vbus_cycle() {
+  # 对 Type-C VBUS 使能脚（GPIO4_A1）做一次真断电复位：host 首次插入 U 盘
+  # 常枚举失败，实测断电 400ms 再上电即可重新枚举（等同用户手拔插一次）。
+  # RK3588 GPIO SWPORT_DR_L 为掩码写：高 16 位=写掩码，低 16 位=数据。
+  dr=$(busybox devmem "$VBUS_DR" 32 2>/dev/null) || return 0
+  bits=$(( dr & 0xffff ))
+  low=$(printf '0x%08x' $(( (0x0002 << 16) | (bits & ~0x2) )))
+  high=$(printf '0x%08x' $(( (0x0002 << 16) | bits )))
+  log "VBUS 断电复位（GPIO4_A1, dr=0x$(printf %04x "$bits")）"
+  busybox devmem "$VBUS_DR" 32 "$low" 2>/dev/null || return 0
+  sleep 0.4
+  busybox devmem "$VBUS_DR" 32 "$high" 2>/dev/null || true
+}
+
 host_dev_count() {
   # 只统计真正接入的设备（排除每个总线自带的 root hub 接口条目 9-0:1.0）
   ls -d /sys/devices/platform/fc000000.usb/xhci-hcd.*/usb*/[0-9]*-[0-9]* 2>/dev/null | grep -vc ":"
@@ -105,8 +120,8 @@ while :; do
   udc=$(cat "$UDC_STATE" 2>/dev/null || echo unknown)
   st0=$(i2cget -f -y "$I2C_BUS" "$I2C_ADDR" 0x40 2>/dev/null || echo "")
   case "$st0" in
-    0x82|0xA2|0xa2) has_sink=1 ;;   # BC_LVL 低位为 0：CC 上挂着 sink（U盘等）
-    *)              has_sink=0 ;;
+    0x83|0xA3|0xa3) has_sink=0 ;;    # BC_LVL=3：CC 空载
+    *)              has_sink=1 ;;    # 其余（0x80/0x81/0x82…）视为挂了 sink 设备
   esac
   if [ "$mode" = "device" ]; then
     host_since=0
@@ -132,15 +147,14 @@ while :; do
     [ "$host_since" -eq 0 ] && host_since=$(now)
     n=$(host_dev_count)
     elapsed=$(( $(now) - host_since ))
-    if [ "$n" -eq 0 ] && [ "$elapsed" -ge 2 ] && [ "$retry_done" -eq 0 ]; then
+    if [ "$n" -eq 0 ] && [ "$elapsed" -ge 4 ] && [ "$retry_done" -eq 0 ]; then
       # 有些 U 盘在端口刚从 device 切成 host 时会枚举失败，需要一次「模拟拔插」：
       # 快速 device→host 切换，强制设备重新协商（用户手动二次插拔能成功，原理相同）
       retry_done=1
-      log "host 无设备 ${elapsed}s，模式重试（device→host）"
-      echo device > "$MODE_FILE" 2>/dev/null; sleep 0.4
-      echo host > "$MODE_FILE" 2>/dev/null; host_since=$(now)
-      sleep 0
-    elif [ "$n" -eq 0 ] && [ "$elapsed" -ge 5 ]; then
+      log "host 无设备 ${elapsed}s，VBUS 断电复位重试"
+      vbus_cycle
+      host_since=$(now)
+    elif [ "$n" -eq 0 ] && [ "$elapsed" -ge 8 ]; then
       empty_streak=$((empty_streak + 1))
     else
       empty_streak=0
