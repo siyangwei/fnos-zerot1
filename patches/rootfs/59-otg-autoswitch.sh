@@ -67,7 +67,24 @@ dtb_role() {
   "$ROLE_TOOL" status 2>/dev/null | sed -n 's/^dtb 角色:[[:space:]]*\([a-z]*\).*/\1/p' | head -1
 }
 
+gadget_bound() { [ -n "$(cat /sys/kernel/config/usb_gadget/zt1/UDC 2>/dev/null)" ]; }
+rebind_adbd() {
+  i=0
+  log "adbd gadget 未绑定，重启 adbd 重新绑定"
+  systemctl restart adbd >/dev/null 2>&1 || true
+  # 等 gadget 真正绑上（最多 6s），避免下一轮循环重复重启
+  while [ "$i" -lt 30 ]; do
+    gadget_bound && break
+    sleep 0.2; i=$((i + 1))
+  done
+}
+
 log "autoswitch 启动（POLL_MS=$POLL_MS）"
+device_since=0
+# 启动时若处于 device 模式但 gadget 没绑上（例如上次 host 模式占用过 UDC），先修一次
+if [ "$(cat "$MODE_FILE" 2>/dev/null)" = "device" ] && ! gadget_bound; then
+  rebind_adbd; device_since=$(now)
+fi
 while :; do
   # 用户刚手动切过 → 10 分钟内不自动干预
   if [ -f "$STAMP" ]; then
@@ -87,19 +104,22 @@ while :; do
   esac
   if [ "$mode" = "device" ]; then
     host_since=0
+    [ "$device_since" -eq 0 ] && device_since=$(now)
+    gadget_bound || rebind_adbd
     if [ "$udc" = "not attached" ] && [ "$has_sink" = 1 ]; then
       sink_streak=$((sink_streak + 1))
     else
       sink_streak=0
     fi
-    if [ "$sink_streak" -ge 2 ]; then
+    # 至少停留 2s 再考虑切 host：避免把「PC 刚插上、UDC 还在枚举」误判成 U 盘
+    if [ "$sink_streak" -ge 2 ] && [ $(( $(now) - device_since )) -ge 2 ]; then
       sink_streak=0
       if echo host > "$MODE_FILE" 2>/dev/null; then
-        host_since=$(now); log "device→host（STATUS0=$st0）"
+        host_since=$(now); device_since=0; log "device→host（STATUS0=$st0）"
       fi
     fi
   elif [ "$mode" = "host" ]; then
-    sink_streak=0
+    sink_streak=0; device_since=0
     [ "$host_since" -eq 0 ] && host_since=$(now)
     n=$(host_dev_count)
     if [ "$n" -eq 0 ] && [ $(( $(now) - host_since )) -ge 3 ]; then
@@ -110,7 +130,9 @@ while :; do
     if [ "$empty_streak" -ge 2 ]; then
       empty_streak=0; host_since=0
       if echo device > "$MODE_FILE" 2>/dev/null; then
+        device_since=$(now)
         log "host→device（无设备，STATUS0=$st0）"
+        gadget_bound || rebind_adbd
       fi
     fi
   fi
