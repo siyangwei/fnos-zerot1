@@ -182,6 +182,26 @@ for pair in rk806-rstfix:rk806_rstfix smdt-mcu-wdt:smdt_mcu_wdt; do
 done
 depmod "$NEW" >/dev/null 2>&1 || log "警告: depmod $NEW 失败（不致命）"
 
+# ---- 1c. 重编 bcmdhd_sdio（AP6256 WiFi 驱动，换内核后必须按新内核重编）----
+BLIB=/usr/local/lib/zt1/bcmdhd
+if [ -d "$BLIB/src" ] && [ -f "$BLIB/src/Makefile" ]; then
+    bd="$(mktemp -d)"
+    cp -a "$BLIB/src"/. "$bd"/
+    if make -C "$HB" M="$bd" ARCH=arm64 CONFIG_BCMDHD_SDIO=y CONFIG_MACH_PLATFORM=y CONFIG_BCMDHD_DTS=y CONFIG_BCMDHD_OOB= CONFIG_BCMDHD_PCIE= CONFIG_BCMDHD_USB= modules >>"$LOG" 2>&1 \
+        && [ -f "$bd/bcmdhd_sdio.ko" ] && [ -f "$bd/dhd_static_buf_sdio.ko" ]; then
+        mkdir -p "$BLIB/modules/$NEW"
+        cp -f "$bd/bcmdhd_sdio.ko" "$bd/dhd_static_buf_sdio.ko" "$BLIB/modules/$NEW/"
+        strip --strip-debug "$BLIB/modules/$NEW/"*.ko 2>/dev/null || true
+        log "已安装 bcmdhd_sdio.ko 到 $BLIB/modules/$NEW"
+    else
+        log "警告: bcmdhd_sdio 编译失败（新内核 $NEW），WiFi 将回退 brcmfmac"
+        tail -10 "$bd/build.log" >> "$LOG" 2>/dev/null || true
+    fi
+    rm -rf "$bd"
+else
+    log "跳过 bcmdhd 重编（$BLIB/src 缺失）"
+fi
+
 # ---- 2. initrd.img + uInitrd ----
 command -v mkinitramfs >/dev/null 2>&1 || die "缺少 mkinitramfs"
 command -v mkimage     >/dev/null 2>&1 || die "缺少 mkimage（u-boot-tools）"

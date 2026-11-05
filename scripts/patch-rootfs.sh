@@ -31,6 +31,8 @@
 #   56-fast-reboot.sh   reboot 时写 CRU GLB_SRST_FST，跳过 PSCI+PMIC 的 ~90s 空档
 #   50-watchdog.sh       systemd RuntimeWatchdogSec + watchdog 工具
 #   60-desktop-apps.sh   nm-applet / blueman / chromium / alsa-utils + autostart
+#   61-syscheck.sh       内置系统自检 zt1-check（显示/音频/加速器/存储/USB/网络/服务）
+#   62-bcmdhd.sh         用 vendor bcmdhd_sdio 驱动替换 brcmfmac（AP6256 稳定性/吞吐）
 #   70-audio-state.sh    ES8388 喇叭功放使能（spk switch）
 #   80-docker-fix.sh     docker.service ExecStop bug + 国内镜像源
 #   90-rootfs-resize.sh  禁用 fnOS 自动扩容 rootfs（stub + dpkg-divert + 开机自愈）
