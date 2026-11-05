@@ -41,6 +41,10 @@ apt-get install -y --no-install-recommends alsa-utils x11-xserver-utils \
 apt-get install -y --no-install-recommends chromium \
     || echo "[60] WARN: chromium 安装失败"
 
+# 视频播放器（45-desktop-apps.sh 写了 mpv.desktop；不装二进制会显示成"感叹号"死图标）
+apt-get install -y --no-install-recommends mpv \
+    || echo "[60] WARN: mpv 安装失败"
+
 apt-get clean
 rm -rf /var/lib/apt/lists/*
 '
