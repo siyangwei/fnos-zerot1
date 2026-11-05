@@ -70,6 +70,8 @@ dtb_role() {
 gadget_bound() { [ -n "$(cat /sys/kernel/config/usb_gadget/zt1/UDC 2>/dev/null)" ]; }
 rebind_adbd() {
   i=0
+  [ $(( $(now) - last_rebind )) -lt 5 ] && return 0   # 5s 内不重复重启
+  last_rebind=$(now)
   log "adbd gadget 未绑定，重启 adbd 重新绑定"
   systemctl restart adbd >/dev/null 2>&1 || true
   # 等 gadget 真正绑上（最多 6s），避免下一轮循环重复重启
@@ -81,6 +83,10 @@ rebind_adbd() {
 
 log "autoswitch 启动（POLL_MS=$POLL_MS）"
 device_since=0
+last_rebind=0
+retry_done=0
+armed=1        # 允许 device→host 的「可信」标志：见过一次空座(has_sink=0)后置 1
+sink_long=0
 # 启动时若处于 device 模式但 gadget 没绑上（例如上次 host 模式占用过 UDC），先修一次
 if [ "$(cat "$MODE_FILE" 2>/dev/null)" = "device" ] && ! gadget_bound; then
   rebind_adbd; device_since=$(now)
@@ -106,31 +112,43 @@ while :; do
     host_since=0
     [ "$device_since" -eq 0 ] && device_since=$(now)
     gadget_bound || rebind_adbd
+    if [ "$has_sink" = 0 ]; then armed=1; fi
     if [ "$udc" = "not attached" ] && [ "$has_sink" = 1 ]; then
       sink_streak=$((sink_streak + 1))
     else
       sink_streak=0
     fi
-    # 至少停留 2s 再考虑切 host：避免把「PC 刚插上、UDC 还在枚举」误判成 U 盘
-    if [ "$sink_streak" -ge 2 ] && [ $(( $(now) - device_since )) -ge 2 ]; then
+    [ "$sink_streak" -ge 15 ] && armed=1   # 连续 3s 稳定有 sink，视为真实设备
+    # 至少停留 2s 再考虑切 host；armed=0 时要求 15 次连续采样，避免 PC 拔出后的残留 CC 状态导致来回切
+    need=2; [ "$armed" -eq 0 ] && need=15
+    if [ "$sink_streak" -ge "$need" ] && [ $(( $(now) - device_since )) -ge 2 ]; then
       sink_streak=0
       if echo host > "$MODE_FILE" 2>/dev/null; then
-        host_since=$(now); device_since=0; log "device→host（STATUS0=$st0）"
+        host_since=$(now); device_since=0; retry_done=0; log "device→host（STATUS0=$st0）"
       fi
     fi
   elif [ "$mode" = "host" ]; then
     sink_streak=0; device_since=0
     [ "$host_since" -eq 0 ] && host_since=$(now)
     n=$(host_dev_count)
-    if [ "$n" -eq 0 ] && [ $(( $(now) - host_since )) -ge 3 ]; then
+    elapsed=$(( $(now) - host_since ))
+    if [ "$n" -eq 0 ] && [ "$elapsed" -ge 2 ] && [ "$retry_done" -eq 0 ]; then
+      # 有些 U 盘在端口刚从 device 切成 host 时会枚举失败，需要一次「模拟拔插」：
+      # 快速 device→host 切换，强制设备重新协商（用户手动二次插拔能成功，原理相同）
+      retry_done=1
+      log "host 无设备 ${elapsed}s，模式重试（device→host）"
+      echo device > "$MODE_FILE" 2>/dev/null; sleep 0.4
+      echo host > "$MODE_FILE" 2>/dev/null; host_since=$(now)
+      sleep 0
+    elif [ "$n" -eq 0 ] && [ "$elapsed" -ge 5 ]; then
       empty_streak=$((empty_streak + 1))
     else
       empty_streak=0
     fi
     if [ "$empty_streak" -ge 2 ]; then
-      empty_streak=0; host_since=0
+      empty_streak=0; host_since=0; retry_done=0
       if echo device > "$MODE_FILE" 2>/dev/null; then
-        device_since=$(now)
+        device_since=$(now); armed=0; retry_done=0
         log "host→device（无设备，STATUS0=$st0）"
         gadget_bound || rebind_adbd
       fi
