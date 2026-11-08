@@ -1,0 +1,25 @@
+// SPDX-License-Identifier: (GPL-2.0+ OR MIT)
+/*
+ * Copyright (c) 2023 John Clark <inindev@gmail.com>
+ * zeroT1: 从 rk3588-nanopc-t6-u-boot.dtsi 复制（U-Boot 自动按 dts 名加载）
+ *
+ */
+
+#include "rk3588-u-boot.dtsi"
+
+&fspim1_pins {
+	bootph-pre-ram;
+	bootph-some-ram;
+};
+
+&saradc {
+	bootph-pre-ram;
+	vdd-microvolts = <1800000>;
+};
+
+&sfc {
+	flash@0 {
+		bootph-pre-ram;
+		bootph-some-ram;
+	};
+};

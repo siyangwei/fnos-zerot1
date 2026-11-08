@@ -191,3 +191,22 @@ fnOS 的 `trim` 包 postinst 每次升级都会 `systemctl enable resize-rootfs.
 该服务会把 rootfs 扩到 28GB、吃掉留给存储池的空间。本镜像在 `patches/rootfs/90-rootfs-resize.sh`
 里用 **dpkg-divert + stub + `zt1-rootfs-guard` 开机自愈** 彻底关掉它（原脚本保留在
 `/usr/trim/bin/resize-rootfs.sh.distrib`，用 `dpkg-divert --remove --rename` 可恢复官方行为）。
+
+## 上游 U-Boot 引导链（可选）
+
+除了默认的厂商 2017.09 u-boot，仓库还支持**上游 U-Boot（v2026.10）引导链**：
+
+| 位置 | 内容 |
+|---|---|
+| `assets/uboot-upstream/idbloader.img` | binman 产物：TPL(2122/2400 DDR) + SPL，写到 eMMC 0x40 |
+| `assets/uboot-upstream/u-boot.itb` | FIT：BL31 v1.53 + U-Boot + DTB，写到 eMMC 0x4000 |
+| `assets/uboot-upstream/MiniLoaderAll.bin` | **LDR 封装**：厂商 USB 段 + 上游 idbloader 三段，供 `uf` 整包刷写 |
+| `assets/uboot-upstream/src/` | defconfig / 板级 dts / u-boot dtsi / bootflow 补丁 |
+
+要点：
+
+- 上游 bootstd + extlinux 自动扫描所有分区（`cmd/bootflow.c` 去掉 `BOOTFLOWIF_ONLY_BOOTABLE`，补丁在 `src/0001-…`），因此**不写死 rootfs 分区**，root 由 `extlinux.conf` 的 `append root=UUID=…` 决定。
+- `uf` 的 loader 槽只接受 LDR 格式，`scripts/make-ldr-loader.sh` 会把上游 `idbloader.img` 重新封装成 LDR（生成 `assets/uboot-upstream/MiniLoaderAll.bin`），已做回读校验。
+- 构建：`sudo bash scripts/build-uboot-upstream.sh`（下载 tarball → 应用补丁 → 构建 → 生成 LDR → 更新 MD5SUMS）。
+- 打包：`UBOOT_MODE=upstream sudo -E bash scripts/pack-image.sh`。
+- 刷写：`sudo bash scripts/flash-image.sh output/xxx.img`（等价 `upgrade_tool uf`）；失败兜底为三步刷 `db - wl 0x40 idbloader - wl 0x4000 u-boot.itb - rd`。

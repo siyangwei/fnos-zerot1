@@ -1,0 +1,13 @@
+--- a/cmd/bootflow.c
++++ b/cmd/bootflow.c
+@@ -191,7 +191,9 @@
+ 
+ 	std->cur_bootflow = NULL;
+ 
+-	flags = BOOTFLOWIF_ONLY_BOOTABLE;
++	/* zt1: Rockchip parameter 生成的 GPT 没有 legacy bootable 标记，
++	 * 只扫 bootable 分区会漏掉 boot 分区，这里改为扫描全部分区 */
++	flags = 0;
+ 	if (list)
+ 		flags |= BOOTFLOWIF_SHOW;
+ 	if (all)

@@ -1,0 +1,25 @@
+// SPDX-License-Identifier: (GPL-2.0+ OR MIT)
+/*
+ * Shimeta AIOT-3588A (zeroT1) —— U-Boot 板级 DTS
+ *
+ * 说明：本板与 FriendlyElec NanoPC-T6 同为 RK3588 + RK806 PMIC + eMMC + UART2 调试口，
+ * 因此 U-Boot 阶段复用 upstream 的 rk3588-nanopc-t6.dtsi（外设/U-Boot 只用到
+ * eMMC、UART2、RK806、DRAM）。这里禁用 U-Boot 阶段用不到的 PCIe，
+ * 避免 bootstd 扫描 NVMe bootdev 时卡在 PCIe link-up 等待上（实测会 hang）。
+ */
+
+/dts-v1/;
+
+#include "rk3588-nanopc-t6.dtsi"
+
+/ {
+	model = "Shimeta AIOT-3588A (zeroT1)";
+	compatible = "shimeta,aiot3588a", "rockchip,rk3588";
+};
+
+/* U-Boot 阶段不需要 PCIe/NVMe（Linux 侧 DT 已另行启用），禁用可避免 bootstd 卡死 */
+&pcie3x4 { status = "disabled"; };
+&pcie3x2 { status = "disabled"; };
+&pcie2x1l0 { status = "disabled"; };
+&pcie2x1l1 { status = "disabled"; };
+&pcie2x1l2 { status = "disabled"; };

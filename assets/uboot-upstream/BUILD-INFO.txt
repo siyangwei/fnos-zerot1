@@ -1,0 +1,40 @@
+u-boot 上游（upstream）实验构建
+==============================
+源码:        u-boot v2026.10（GitHub u-boot/u-boot archive tarball）
+target:      本仓库自建 zerot1-rk3588_defconfig（src/zerot1-rk3588_defconfig）
+             板级 dts: src/rk3588-aiot3588a.dts（复用 rk3588-nanopc-t6.dtsi）
+             U-Boot 侧 u-boot dtsi: src/rk3588-aiot3588a-u-boot.dtsi
+             补丁: src/0001-bootflow-scan-all-partitions.patch
+                   （cmd/bootflow.c 去掉 BOOTFLOWIF_ONLY_BOOTABLE，让 bootstd
+                     扫描全部 GPT 分区，从而找到 boot 分区的 extlinux.conf）
+BL31:        rk3588_bl31_v1.53.elf（Android SDK rkbin）
+ROCKCHIP_TPL: rk3588_ddr_lp4_2112MHz_lp5_2400MHz_v1.20.bin
+              （通用 rkbin，LPDDR4 2112MHz / LPDDR5 2400MHz；
+               取 /home/zero/work/rk35xx-android14/rkbin/bin/rk35/）
+工具链:      Android prebuilts gcc-arm-10.2 aarch64-none-linux-gnu-
+构建日期:    2026-11-09
+
+产物:
+  idbloader.img         223232 B  (binman: TPL + SPL；刷 eMMC 0x40 扇区)
+  u-boot.itb           1323520 B  (FIT: BL31 + u-boot + DTB；刷 eMMC 0x4000 扇区)
+  MiniLoaderAll.bin     393664 B  (LDR 封装：厂商 USB 段 + 上述 idbloader 三段，
+                                   用于 `upgrade_tool uf` 整包刷写时占 loader 槽)
+
+关键配置:
+  CONFIG_BAUDRATE=1500000（与本板串口 ttyS2 一致）
+  CONFIG_BOOTCOMMAND="bootflow scan -lb mmc0"
+  CONFIG_BOOTSTD=y / CONFIG_BOOTMETH_EXTLINUX=y / CONFIG_FS_EXT4=y
+  CONFIG_SYS_MMCSD_RAW_MODE_U_BOOT_SECTOR=0x4000（SPL 从 0x4000 扇区加载 u-boot.itb）
+  PCIe/NVMe/EFI bootmgr 均关闭（U-Boot 阶段不需要，且本板 PCIe link fail 会卡住）
+
+引导方式（不写死分区）:
+  上游 u-boot 用 bootstd 扫描所有 bootdev（eMMC/SD/USB/网络），
+  在 boot 分区找到 /extlinux/extlinux.conf 后按其 label 启动；
+  root 由 extlinux.conf 的 append（root=UUID=...）决定。
+
+LDR 封装说明:
+  `scripts/make-ldr-loader.sh` 用 assets/tools/boot_merger：
+  1) unpack 厂商 assets/MiniLoaderAll.bin，保留 UsbHead/ddr/usbplug 三段；
+  2) 按 RKNS v2 头把 idbloader.img 拆成 FlashHead/FlashData/FlashBoot；
+  3) pack 成新 LDR，并回读校验 flash 三段拼接 == idbloader.img。
+  已校验：update.img 解包出的 boot.bin == MiniLoaderAll.bin（md5 一致）。

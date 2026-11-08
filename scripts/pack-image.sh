@@ -64,8 +64,32 @@ rm -rf "$UPDATE_DIR"
 mkdir -p "$UPDATE_DIR/images"
 
 # ---- 1. loader / u-boot（预编译复用 assets/）----
-cp -f "$ASSETS_DIR/MiniLoaderAll.bin" "$UPDATE_DIR/MiniLoaderAll.bin"
-cp -f "$ASSETS_DIR/uboot.img" "$UPDATE_DIR/uboot.img"
+# UBOOT_MODE=vendor（默认）: 友善厂商 u-boot（assets/MiniLoaderAll.bin + assets/uboot.img）
+# UBOOT_MODE=upstream     : 上游 u-boot（assets/uboot-upstream/idbloader.img + u-boot.itb）
+UBOOT_MODE="${UBOOT_MODE:-vendor}"
+case "$UBOOT_MODE" in
+  vendor)
+    UBOOT_LOADER="$ASSETS_DIR/MiniLoaderAll.bin"
+    UBOOT_IMAGE="$ASSETS_DIR/uboot.img"
+    ;;
+  upstream)
+    # update.img 的 loader 必须是 upgrade_tool 能加载的 LDR（'LDR ' 头）。
+    # assets/uboot-upstream/MiniLoaderAll.bin 由 scripts/make-ldr-loader.sh 生成：
+    # 厂商 USB 下载段 + 我们的 flash 三段（header/ddr/spl），其 flash 段拼接 == 上游 idbloader.img。
+    # 因此 uf 刷完后 eMMC 0x40 处就是上游 idbloader，重启直接进上游 SPL → 0x4000 的 u-boot.itb。
+    if [[ -f "$ASSETS_DIR/uboot-upstream/MiniLoaderAll.bin" ]]; then
+      UBOOT_LOADER="$ASSETS_DIR/uboot-upstream/MiniLoaderAll.bin"
+    else
+      log "WARN: 缺少 assets/uboot-upstream/MiniLoaderAll.bin（先跑 scripts/make-ldr-loader.sh），退回厂商 loader"
+      UBOOT_LOADER="$ASSETS_DIR/MiniLoaderAll.bin"
+    fi
+    UBOOT_IMAGE="$ASSETS_DIR/uboot-upstream/u-boot.itb"
+    ;;
+  *) die "UBOOT_MODE 只支持 vendor|upstream（当前: $UBOOT_MODE）" ;;
+esac
+log "u-boot 模式: $UBOOT_MODE（loader=$(basename "$UBOOT_LOADER") image=$(basename "$UBOOT_IMAGE")）"
+cp -f "$UBOOT_LOADER" "$UPDATE_DIR/MiniLoaderAll.bin"
+cp -f "$UBOOT_IMAGE" "$UPDATE_DIR/uboot.img"
 
 # ---- 2. misc.img（4MB 全零，清掉 Android 的 recovery 标记）----
 log "生成 misc.img (4MB 零)"
