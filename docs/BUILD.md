@@ -192,9 +192,9 @@ fnOS 的 `trim` 包 postinst 每次升级都会 `systemctl enable resize-rootfs.
 里用 **dpkg-divert + stub + `zt1-rootfs-guard` 开机自愈** 彻底关掉它（原脚本保留在
 `/usr/trim/bin/resize-rootfs.sh.distrib`，用 `dpkg-divert --remove --rename` 可恢复官方行为）。
 
-## 上游 U-Boot 引导链（可选）
+## 上游 U-Boot 引导链（默认）
 
-除了默认的厂商 2017.09 u-boot，仓库还支持**上游 U-Boot（v2026.10）引导链**：
+默认使用**上游 U-Boot（v2026.10）引导链**（`UBOOT_MODE=upstream`）；`UBOOT_MODE=vendor` 可退回厂商 2017.09 方案：
 
 | 位置 | 内容 |
 |---|---|

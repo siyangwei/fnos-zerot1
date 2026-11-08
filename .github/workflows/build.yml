@@ -10,7 +10,9 @@ name: Build image
 #   - ophub/fnnas 底稿镜像 fnnas_rockchip_1253（仅取 rootfs）
 #   - ophub/fnnas 官方内核包 kernel_fnnas/6.18.18-rockchip.tar.gz
 #   - kernel.org linux-6.18.18 源码（仅取编译 dts 需要的头文件）
-# u-boot 用仓库里预编译的 assets/uboot.img（源码补丁见 patches/uboot/，见 docs/UBOOT.md）。
+# u-boot 用仓库里预编译的上游 U-Boot 产物（assets/uboot-upstream/，源码与补丁见 docs/UBOOT.md）：
+#   idbloader.img + u-boot.itb + 由 scripts/make-ldr-loader.sh 生成的 LDR MiniLoaderAll.bin，
+#   默认 UBOOT_MODE=upstream（bootstd/extlinux 自动扫描，不写死 rootfs 分区）。
 #
 # 密码类配置（WiFi/root）不要写进仓库：在仓库 Settings → Secrets 里配置同名变量，
 # 本工作流会把它们写进临时的 config.env（该文件已被 .gitignore 忽略）。
@@ -43,6 +45,8 @@ jobs:
       USB_ROLE: ${{ secrets.USB_ROLE }}
       # 射频国家码（默认 US，见 config.env.example 说明；CN 域不扫 5G DFS）
       WIFI_COUNTRY: ${{ secrets.WIFI_COUNTRY }}
+      # 引导链：upstream=上游 U-Boot v2026.10（默认，bootstd/extlinux、uf 一条命令可刷）
+      UBOOT_MODE: upstream
     steps:
       - name: 检出仓库
         uses: actions/checkout@v4

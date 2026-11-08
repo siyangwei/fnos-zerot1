@@ -57,6 +57,9 @@ IMAGE_DIR="${IMAGE_DIR:-$WORK_DIR/images}"
 BOARD_MODEL="${BOARD_MODEL:-AIOT-3588A}"
 BOARD_REV="${BOARD_REV:-V1.1}"
 IMG_BASENAME="${IMG_BASENAME:-fnos-aiot3588a-$(echo "$BOARD_REV" | tr "A-Z" "a-z")-update}"
+# 引导链：upstream=上游 U-Boot v2026.10（默认）；vendor=厂商 2017.09
+UBOOT_MODE="${UBOOT_MODE:-upstream}"
+export UBOOT_MODE
 ROOTFS="${ROOTFS:-$PROJECT_DIR/work/rootfs}"
 
 ASSETS_DIR="$PROJECT_DIR/assets"

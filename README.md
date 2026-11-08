@@ -31,19 +31,45 @@ fnOS 官方内核 6.18.18-trim（vmlinuz + uInitrd + modules，含 trimafs/zfs/r
         +
 本仓库的板级设备树（mainline 6.18 dts + 厂商 BSP 节点移植，含 eDP/HDMI/WiFi/BT/PCIe/MPP）
         +
-定制 u-boot（预编译 assets/uboot.img：修千兆网口 CPLL、补 FS_EXT4、直连引导）
+上游 U-Boot v2026.10（自建 zerot1-rk3588_defconfig + 板级 dts；bootstd + extlinux 引导）
         ↓
-output/fnos-aiot3588a-v1.1-update-<日期>.img   （RKFW，upgrade_tool uf 烧录）
+output/fnos-aiot3588a-v1.1-update-<日期>.img   （RKFW，upgrade_tool uf 一条命令烧录）
 ```
+
+### 引导链（上游 U-Boot）
+
+```
+BootROM
+  ↓  eMMC 0x40      idbloader.img     （binman: TPL(DDR) + SPL）
+  ↓  eMMC 0x4000    u-boot.itb        （FIT: BL31 v1.53 + U-Boot 2026.10 + DTB）
+  ↓  bootstd 扫描所有分区 → extlinux bootmeth
+  ↓  boot 分区(p4) /extlinux/extlinux.conf
+  ↓  kernel = /Image（软链 → vmlinuz-<ver>）、initrd = /uInitrd、fdt = /dtb/rockchip/…dtb
+  ↓  append: root=UUID=<rootfs 分区 UUID> rootfstype=btrfs …
+fnOS（rootfs p5，按 UUID 挂载，不写死分区号）
+```
+
+- **不写死 rootfs 分区**：U-Boot 侧打了一个补丁（`assets/uboot-upstream/src/0001-bootflow-scan-all-partitions.patch`），
+  去掉 `cmd/bootflow.c` 里的 `BOOTFLOWIF_ONLY_BOOTABLE`，让 bootstd 扫描全部 GPT 分区；
+  Rockchip `parameter.txt` 生成的 GPT 没有 legacy bootable 标志，否则只会扫到分区 1。
+- u-boot 阶段不需要再修 CPLL：内核 dtsi 的 `assigned-clocks` 会把 `pll_cpll` 设成 1.5GHz、
+  `clk_gmac_125m` 设成 125MHz（实测 Linux 侧 `clk_gmac_125m = 125000000`）。
+- **Linux 侧不做任何改动**，所以与 fnOS 官方内核/rootfs 完全兼容。
+- 旧的「厂商定制 u-boot」方案仍保留：构建时传 `UBOOT_MODE=vendor` 即可（见 [docs/UBOOT.md](docs/UBOOT.md)）。
+
+`uf` 的 loader 槽必须是 `LDR ` 容器，仓库用 `scripts/make-ldr-loader.sh`（boot_merger 的厂商
+`NEWIDB=true` ini 流水线：DDR + 上游 SPL）生成 `assets/uboot-upstream/MiniLoaderAll.bin`，
+因此**一条 `uf` 命令就能把整条上游引导链刷进板子**。
 
 **为什么用 fnOS 官方内核而不是主线/友善内核**：fnOS 管理界面（trim 系列服务）依赖
 `trimafs` 私有文件系统、ZFS、`rk_vcodec` 等只存在于官方内核的驱动，换内核会导致 Web 管理界面
 无法启动；因此内核保持官方预编译版本，板级支持全部通过 **设备树 + initramfs 里的模块替换 +
 用户态模块** 实现。
 
-**为什么需要定制 u-boot**：官方/友善 u-boot 用内核 dtb 设时钟时 PLL 编号与内核差 1，
-会把 CPLL 写成 1188MHz，导致 GMAC 参考时钟 99MHz（千兆网口完全不通）。
-定制版在跳内核前把 CPLL 设回 1500MHz，并改为直连引导（`/Image` + `/uInitrd` + 板级 dtb）。
+**为什么换上游 u-boot**：厂商 2017.09 u-boot 用内核 dtb 设时钟时 PLL 编号与内核差 1，
+会把 CPLL 写成 1188MHz，导致 GMAC 参考时钟 99MHz（千兆网口完全不通），而且它的
+bootcmd 写死「从 0x40 处读 SPL、直连 /Image」，升级/换布局都很别扭。上游 U-Boot 2026.10
+用 bootstd + extlinux 扫描分区、按 UUID 挂 rootfs，引导链清晰且完全可复现（源码/补丁都在仓库）。
 
 ---
 
@@ -97,7 +123,9 @@ output/fnos-aiot3588a-v1.1-update-<日期>.img   （RKFW，upgrade_tool uf 烧�
 
 ```
 assets/                 预编译产物（u-boot、定制内核模块、打包工具）
-  uboot.img               定制 u-boot（4MB）
+  uboot-upstream/         上游 U-Boot v2026.10：idbloader.img / u-boot.itb / LDR MiniLoaderAll.bin / src 源码
+  uboot.img               厂商定制 u-boot（UBOOT_MODE=vendor 时使用，4MB）
+  tools/boot_merger       Rockchip loader 打包工具（生成 LDR 用）
   modules/6.18.18-trim/   analogix_dp.ko / brcmfmac 三件套 / smdt_mcu_wdt.ko
   adbd-ss-shim/           libadbd_ss_shim.so（adb SuperSpeed 描述符 shim）
   tools/                  mkupdate.sh / resource_tool 等 Rockchip 打包工具
@@ -122,6 +150,10 @@ config.env.example      构建配置模板（复制为 config.env 后填写；�
 | `scripts/normalize-ownership.sh` | 修正 rootfs 属主（否则 postgres/ssh 会在新镜像里坏掉） |
 | `scripts/pack-image.sh` | 组装 boot/rootfs/resource 分区并打包 `update.img` |
 | `scripts/uinitrd-tool.py` | 解析/替换/重打包 initramfs（legacy uImage + zstd） |
+| `scripts/build-uboot-upstream.sh` | 下载上游 u-boot v2026.10 → 应用补丁 → 构建 → 生成 LDR（仅改 u-boot 时需要；CI 直接复用 assets） |
+| `scripts/make-ldr-loader.sh` | 用 boot_merger 厂商 ini 流水线把上游 SPL+DDR 封装成 LDR `MiniLoaderAll.bin` |
+| `scripts/flash-image.sh` | 一条命令刷写：`sudo bash scripts/flash-image.sh output/xxx.img`（内部就是 `upgrade_tool uf`） |
+| `scripts/flash-uboot-upstream.sh` | 兜底：MaskROM 下分步刷 loader1/idbloader + loader2/u-boot.itb |
 
 ---
 
@@ -133,9 +165,10 @@ config.env.example      构建配置模板（复制为 config.env 后填写；�
 sudo upgrade_tool_2.45 uf fnos-aiot3588a-v1.1-update-YYYYMMDD.img
 ```
 
-`uf` 会自带 loader、写入全部分区并自动复位。板子进 MaskROM 后执行即可；若 `uf` 失败，
-先 `upgrade_tool_2.45 db assets/MiniLoaderAll.bin` 再重试。更详细的救砖流程见
-[docs/BUILD.md](docs/BUILD.md)。
+`uf` 会自带 loader（镜像内置 LDR）、写入全部分区，板子进 MaskROM 后执行即可，刷完 `upgrade_tool_2.45 rd` 重启。
+也可以直接用封装脚本：`sudo bash scripts/flash-image.sh output/xxx.img`。
+若 `uf` 卡在 `Download Boot Fail`，说明设备侧 DDR 状态异常：**给板子断电 5 秒、重新进 MaskROM** 再试。
+救砖/兜底见 [docs/BUILD.md](docs/BUILD.md)（`db assets/MiniLoaderAll.bin` + `scripts/flash-uboot-upstream.sh`）。
 
 ### 2. 首次开机
 
@@ -153,7 +186,8 @@ sudo upgrade_tool_2.45 uf fnos-aiot3588a-v1.1-update-YYYYMMDD.img
 
 ```bash
 cp config.env.example config.env   # 按需填写 WiFi / root 密码
-sudo ./scripts/build-all.sh
+sudo ./scripts/build-all.sh                       # 默认 --UBOOT_MODE=upstream（上游 U-Boot）
+# 或用厂商 u-boot： sudo env UBOOT_MODE=vendor ./scripts/build-all.sh
 ```
 
 首次构建会自动下载（约 2.1GB）：
@@ -234,7 +268,7 @@ zt1-kernel-sync --disable    # 关掉自动跟随
 
 | 分区 | 起始(扇区) | 大小 | 文件系统 | 内容 |
 |---|---|---|---|---|
-| uboot | 0x4000 | 4MB | — | 定制 u-boot |
+| uboot | 0x4000 | 4MB | — | 上游 U-Boot 的 `u-boot.itb`（FIT: BL31 + U-Boot + DTB）；`UBOOT_MODE=vendor` 时为厂商 `uboot.img` |
 | misc | 0x6000 | 4MB | — | 全零 |
 | resource | 0x8000 | 16MB | — | `rk-kernel.dtb` |
 | boot | 0x10000 | **512MB** | **ext4** | `vmlinuz-*` + `uInitrd-*` + `config-*` + `System.map-*` + `Image→vmlinuz-*`、`uInitrd→uInitrd-*`（软链）+ `dtb/rockchip/*.dtb` |

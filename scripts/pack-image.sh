@@ -74,9 +74,10 @@ case "$UBOOT_MODE" in
     ;;
   upstream)
     # update.img 的 loader 必须是 upgrade_tool 能加载的 LDR（'LDR ' 头）。
-    # assets/uboot-upstream/MiniLoaderAll.bin 由 scripts/make-ldr-loader.sh 生成：
-    # 厂商 USB 下载段 + 我们的 flash 三段（header/ddr/spl），其 flash 段拼接 == 上游 idbloader.img。
-    # 因此 uf 刷完后 eMMC 0x40 处就是上游 idbloader，重启直接进上游 SPL → 0x4000 的 u-boot.itb。
+    # assets/uboot-upstream/MiniLoaderAll.bin 由 scripts/make-ldr-loader.sh 用厂商 ini 流水线生成：
+    #   NEWIDB=true + CODE471=DDR + CODE472=usbplug + LOADER=DDR+SPL，
+    #   boot_merger 自动生成 RKNS FlashHead，产出 'LDR ' 容器。
+    # uf 刷完后 eMMC 0x40 处就是上游 idbloader，重启直接进上游 SPL → 0x4000 的 u-boot.itb。
     if [[ -f "$ASSETS_DIR/uboot-upstream/MiniLoaderAll.bin" ]]; then
       UBOOT_LOADER="$ASSETS_DIR/uboot-upstream/MiniLoaderAll.bin"
     else
