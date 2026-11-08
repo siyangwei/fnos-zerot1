@@ -17,8 +17,10 @@ ROCKCHIP_TPL: rk3588_ddr_lp4_2112MHz_lp5_2400MHz_v1.20.bin
 产物:
   idbloader.img         223232 B  (binman: TPL + SPL；刷 eMMC 0x40 扇区)
   u-boot.itb           1323520 B  (FIT: BL31 + u-boot + DTB；刷 eMMC 0x4000 扇区)
-  MiniLoaderAll.bin     393664 B  (LDR 封装：厂商 USB 段 + 上述 idbloader 三段，
-                                   用于 `upgrade_tool uf` 整包刷写时占 loader 槽)
+  MiniLoaderAll.bin     395712 B  (LDR 封装；由 scripts/make-ldr-loader.sh 用
+                                   boot_merger 的厂商 ini 流水线生成：NEWIDB=true，
+                                   CODE471=DDR、CODE472=usbplug、LOADER=DDR+SPL，
+                                   boot_merger 自动生成 RKNS FlashHead)
 
 关键配置:
   CONFIG_BAUDRATE=1500000（与本板串口 ttyS2 一致）
@@ -32,9 +34,16 @@ ROCKCHIP_TPL: rk3588_ddr_lp4_2112MHz_lp5_2400MHz_v1.20.bin
   在 boot 分区找到 /extlinux/extlinux.conf 后按其 label 启动；
   root 由 extlinux.conf 的 append（root=UUID=...）决定。
 
-LDR 封装说明:
-  `scripts/make-ldr-loader.sh` 用 assets/tools/boot_merger：
-  1) unpack 厂商 assets/MiniLoaderAll.bin，保留 UsbHead/ddr/usbplug 三段；
-  2) 按 RKNS v2 头把 idbloader.img 拆成 FlashHead/FlashData/FlashBoot；
-  3) pack 成新 LDR，并回读校验 flash 三段拼接 == idbloader.img。
-  已校验：update.img 解包出的 boot.bin == MiniLoaderAll.bin（md5 一致）。
+LDR 封装说明（2026-11-09 实证）:
+  - 关键点：`uf` 的 loader 槽必须是 "LDR " 容器。用 boot_merger 的
+    `pack -1/-2/-3` 手工拼会得到 "BOOT" 魔术的容器 ⇒ uf 在 Download Boot 阶段失败。
+  - 正确做法：走厂商 ini 流水线（NEWIDB=true），由 boot_merger 生成 LDR 容器并
+    自动生成 RKNS FlashHead。实现在 `scripts/make-ldr-loader.sh`：
+      SPL   = spl/u-boot-spl.bin
+      DDR   = rk3588_ddr_lp4_2112MHz_lp5_2400MHz_v1.20.bin
+      USBPLUG = rk3588_usbplug_v1.11.bin
+  - 已上板验证：`sudo upgrade_tool_2.45 uf output/fnos-aiot3588a-v1.1-update-20261109.img`
+    一条命令刷写成功，串口日志：
+      BL31 v1.53 → U-Boot 2026.10 → bootstd 扫描 mmc0 →
+      `0 extlinux ready mmc 4 mmc@fe2e0000.bootdev.part /extlinux/extlinux.conf`
+      → 启动 fnOS 6.18.18-trim 内核。
