@@ -8,8 +8,11 @@
 # 组件：assets/bcmdhd/firmware（fw/nvram/config）、modules/<kver>（预编译 ko）、src（换内核时重编）
 # 说明：模块按 running kernel 的 vermagic 选择；换内核后由 zt1-kernel-sync 重编
 set -euo pipefail
-SRC=${SRC_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}
-: "${ROOTFS:?ROOTFS 未设置}"
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SRC=${SRC_DIR:-$(cd "$HERE/../.." && pwd)}
+ROOTFS="${1:-${ROOTFS:-}}"          # 兼容 patch-rootfs.sh（导出 ROOTFS）与 build-rootfs.sh（仅传位置参数）
+[ -n "$ROOTFS" ] || { echo "[62-bcmdhd] ERROR: ROOTFS 未设置" >&2; exit 1; }
+[ -d "$ROOTFS" ] || { echo "[62-bcmdhd] ERROR: rootfs 不存在: $ROOTFS" >&2; exit 1; }
 ASSETS="$SRC/assets/bcmdhd"
 LIB="$ROOTFS/usr/local/lib/zt1/bcmdhd"
 log() { echo "[62-bcmdhd] $*"; }

@@ -9,6 +9,8 @@ readonly FOOTER="# 要写入backup分区的文件就是自身(update.img)\n# SEL
 
 readonly PARTITION_TABLE_FILE=$IMAGE_PATH/parameter.txt
 partitions_array=(`cat ${PARTITION_TABLE_FILE} |awk '/^CMDLINE/' |grep -Eo "[^(]*[)$]" |sed 's/.$//'|grep -v "userdata"`)
+# 分区名可能带属性后缀（如 boot:bootable），取冒号前的名字
+partitions_array=( "${partitions_array[@]%%:*}" )
 find_all_of_partitions() {
     for partition in "${partitions_array[@]}"
     do

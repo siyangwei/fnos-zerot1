@@ -16,6 +16,7 @@ source "$HERE/lib-common.sh"
 need_root
 
 BOOT_OFFSET=$((32768 * 512))       # fnOS 底稿 GPT 第 1 分区（boot，ext4，仅供识别）
+export ROOTFS
 ROOTFS_OFFSET=$((1081344 * 512))   # fnOS 底稿 GPT 第 2 分区（rootfs，btrfs）
 
 # ---- 0. 快速路径：SKIP_ROOTFS_EXTRACT=1 且 rootfs 已存在 → 跳过下载/解压/提取 ----

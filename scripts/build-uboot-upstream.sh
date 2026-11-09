@@ -7,8 +7,8 @@
 #    bash scripts/build-uboot-upstream.sh [源码目录]
 #  环境变量:
 #    UB_SRC_URL   源码 tarball URL（默认 GitHub archive v2026.10）
-#    BL31         BL31 路径（默认 Android SDK rkbin v1.53）
-#    ROCKCHIP_TPL DDR TPL（默认 rkbin 2112MHz/2400MHz v1.20）
+#    BL31         BL31 路径（默认 assets/rkbin 官方 v1.56）
+#    ROCKCHIP_TPL DDR TPL（默认 assets/rkbin 官方 2112MHz/2400MHz v1.24）
 #    CROSS_COMPILE aarch64 交叉编译器前缀（默认 Android prebuilts gcc10.2）
 #    UB_BUILD_DIR 源码/构建目录（默认 $WORK_DIR/u-boot-v2026.10）
 #
@@ -30,8 +30,8 @@ source "$HERE/lib-common.sh"
 UB_VER="${UB_VER:-v2026.10}"
 UB_SRC_URL="${UB_SRC_URL:-https://github.com/u-boot/u-boot/archive/refs/tags/${UB_VER}.tar.gz}"
 UB_BUILD_DIR="${UB_BUILD_DIR:-$WORK_DIR/u-boot-${UB_VER#v}}"
-BL31="${BL31:-/home/zero/work/rk35xx-android14/rkbin/bin/rk35/rk3588_bl31_v1.53.elf}"
-ROCKCHIP_TPL="${ROCKCHIP_TPL:-/home/zero/work/rk35xx-android14/rkbin/bin/rk35/rk3588_ddr_lp4_2112MHz_lp5_2400MHz_v1.20.bin}"
+BL31="${BL31:-$HERE/../assets/rkbin/bin/rk35/rk3588_bl31_v1.56.elf}"
+ROCKCHIP_TPL="${ROCKCHIP_TPL:-$HERE/../assets/rkbin/bin/rk35/rk3588_ddr_lp4_2112MHz_lp5_2400MHz_v1.24.bin}"
 CROSS_COMPILE="${CROSS_COMPILE:-/home/zero/work/rk35xx-android14/prebuilts/gcc/linux-x86/aarch64/gcc-arm-10.2-2020.11-x86_64-aarch64-none-linux-gnu/bin/aarch64-none-linux-gnu-}"
 SRC_DIR="$HERE/../assets/uboot-upstream/src"
 OUT_DIR="$HERE/../assets/uboot-upstream"

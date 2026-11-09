@@ -7,17 +7,17 @@ target:      本仓库自建 zerot1-rk3588_defconfig（src/zerot1-rk3588_defconf
              补丁: src/0001-bootflow-scan-all-partitions.patch
                    （cmd/bootflow.c 去掉 BOOTFLOWIF_ONLY_BOOTABLE，让 bootstd
                      扫描全部 GPT 分区，从而找到 boot 分区的 extlinux.conf）
-BL31:        rk3588_bl31_v1.53.elf（Android SDK rkbin）
-ROCKCHIP_TPL: rk3588_ddr_lp4_2112MHz_lp5_2400MHz_v1.20.bin
-              （通用 rkbin，LPDDR4 2112MHz / LPDDR5 2400MHz；
-               取 /home/zero/work/rk35xx-android14/rkbin/bin/rk35/）
+BL31:        rk3588_bl31_v1.56.elf（官方 rockchip-linux/rkbin master bin/rk35）
+ROCKCHIP_TPL: rk3588_ddr_lp4_2112MHz_lp5_2400MHz_v1.24.bin
+              （官方 rockchip-linux/rkbin master，LPDDR4 2112MHz / LPDDR5 2400MHz；
+               已入库 assets/rkbin/bin/rk35/）
 工具链:      Android prebuilts gcc-arm-10.2 aarch64-none-linux-gnu-
 构建日期:    2026-11-09
 
 产物:
-  idbloader.img         223232 B  (binman: TPL + SPL；刷 eMMC 0x40 扇区)
-  u-boot.itb           1323520 B  (FIT: BL31 + u-boot + DTB；刷 eMMC 0x4000 扇区)
-  MiniLoaderAll.bin     395712 B  (LDR 封装；由 scripts/make-ldr-loader.sh 用
+  idbloader.img         225280 B  (binman: TPL + SPL；刷 eMMC 0x40 扇区)
+  u-boot.itb           1329664 B  (FIT: BL31 + u-boot + DTB；刷 eMMC 0x4000 扇区)
+  MiniLoaderAll.bin     481728 B  (LDR 封装；由 scripts/make-ldr-loader.sh 用
                                    boot_merger 的厂商 ini 流水线生成：NEWIDB=true，
                                    CODE471=DDR、CODE472=usbplug、LOADER=DDR+SPL，
                                    boot_merger 自动生成 RKNS FlashHead)

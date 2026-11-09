@@ -221,7 +221,7 @@ CHECK_MASK: 0x80
 TYPE: GPT
 PWR_HLD: 0,0,A,0,1
 PACKAGE_FILE: parameter.txt
-CMDLINE: mtdparts=rk29xxnand:0x00002000@0x00004000(uboot),0x00002000@0x00006000(misc),0x00008000@0x00008000(resource),0x$(printf '%08x' $BOOT_SIZE)@0x$(printf '%08x' $BOOT_START)(boot),0x$(printf '%08x' $ROOTFS_SIZE)@0x$(printf '%08x' $ROOTFS_START)(rootfs)
+CMDLINE: mtdparts=rk29xxnand:0x00002000@0x00004000(uboot),0x00002000@0x00006000(misc),0x00008000@0x00008000(resource),0x$(printf '%08x' $BOOT_SIZE)@0x$(printf '%08x' $BOOT_START)(boot:bootable),0x$(printf '%08x' $ROOTFS_SIZE)@0x$(printf '%08x' $ROOTFS_START)(rootfs)
 uuid:rootfs=357e9eb7-73ea-4367-b981-6296a97687e0
 EOF
 

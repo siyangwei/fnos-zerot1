@@ -9,7 +9,7 @@
 #
 # 输入：
 #   SPL   = 上游 u-boot 的 spl/u-boot-spl.bin（binman 产出的 SPL）
-#   DDR   = rk3588_ddr_lp4_2112MHz_lp5_2400MHz_v1.20.bin（rkbin）
+#   DDR   = rk3588_ddr_lp4_2112MHz_lp5_2400MHz_v1.24.bin（官方 rockchip-linux/rkbin master）
 #   USBPLUG = rk3588_usbplug_v1.11.bin（rkbin）
 #
 # 用法：
@@ -19,11 +19,11 @@ set -euo pipefail
 TOPDIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORK_DIR="${WORK_DIR:-$TOPDIR/work}"
 UBOOT_SRC_DIR="${UBOOT_SRC_DIR:-$WORK_DIR/u-boot-2026.10}"
-RKBIN="${RKBIN:-$(cd "$TOPDIR/.." && pwd)/uboot-fa/rkbin/bin/rk35}"
+RKBIN="${RKBIN:-$TOPDIR/assets/rkbin/bin/rk35}"
 
 SPL="${1:-$UBOOT_SRC_DIR/spl/u-boot-spl.bin}"
 OUT="${2:-$TOPDIR/assets/uboot-upstream/MiniLoaderAll.bin}"
-DDR="${DDR:-$RKBIN/rk3588_ddr_lp4_2112MHz_lp5_2400MHz_v1.20.bin}"
+DDR="${DDR:-$RKBIN/rk3588_ddr_lp4_2112MHz_lp5_2400MHz_v1.24.bin}"
 USBPLUG="${USBPLUG:-$RKBIN/rk3588_usbplug_v1.11.bin}"
 BOOT_MERGER="${BOOT_MERGER:-$TOPDIR/assets/tools/boot_merger}"
 
