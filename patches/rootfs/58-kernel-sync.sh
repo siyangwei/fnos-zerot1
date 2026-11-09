@@ -118,7 +118,10 @@ build_bcmdhd() {
 uintrd_ready() {
     local mk="$BOOT/.zt1-uinitrd-$NEW.md5" mm mu
     [ -f "$mk" ] || return 1
-    read -r mm mu < "$mk" || return 1
+    read -r mm mu < "$mk" || true
+    # 2026-11-09 教训2：marker 末尾若无换行，bash 的 read 在 EOF 未遇换行会返回 1，
+    # 曾导致每次开机都误判 initrd 未就绪 → 无限重启循环。这里按内容非空判断。
+    [ -n "$mm" ] && [ -n "$mu" ] || return 1
     [ "$mm" = "$(md5sum "$KDIR/$MODREL/analogix_dp.ko" 2>/dev/null | cut -d' ' -f1)" ] || return 1
     [ "$mu" = "$(md5sum "$BOOT/uInitrd-$NEW" 2>/dev/null | cut -d' ' -f1)" ] || return 1
 }
@@ -149,8 +152,11 @@ build_uintrd() {
     local PAYLOAD
     PAYLOAD="$(od -An -tx1 -N4 -j64 "$BOOT/uInitrd-$NEW" | tr -d ' \n')"
     [ "$PAYLOAD" = "$MAGIC" ] || die "uInitrd 头部载荷校验失败，不切换"
-    md5sum "$KDIR/$MODREL/analogix_dp.ko" "$BOOT/uInitrd-$NEW" 2>/dev/null \
-        | awk '{print $1}' | tr '\n' ' ' | sed 's/ $//' > "$BOOT/.zt1-uinitrd-$NEW.md5"
+    local MK="$BOOT/.zt1-uinitrd-$NEW.md5" MM UU
+    MM="$(md5sum "$KDIR/$MODREL/analogix_dp.ko" 2>/dev/null | cut -d' ' -f1)"
+    UU="$(md5sum "$BOOT/uInitrd-$NEW" 2>/dev/null | cut -d' ' -f1)"
+    [ -n "$MM" ] && [ -n "$UU" ] || die "marker 计算失败，不切换"
+    printf '%s %s\n' "$MM" "$UU" > "$MK"
     log "已生成 uInitrd-$NEW（marker：补丁模块 md5 + uInitrd md5）"
 }
 
@@ -286,9 +292,11 @@ for pair in rk806-rstfix:rk806_rstfix smdt-mcu-wdt:smdt_mcu_wdt; do
 done
 depmod "$NEW" >/dev/null 2>&1 || log "警告: depmod $NEW 失败（不致命）"
 
-# ---- 1c. 重编 bcmdhd_sdio（AP6256 WiFi 驱动，换内核后必须按新内核重编）----
-if ! build_bcmdhd; then
-    retry_later
+# ---- 1c. bcmdhd 推迟到二次重启后由「修复模式」补齐 ----
+# bcmdhd 编译约 3~4 分钟，放在切换前会显著推迟二次重启；它只是运行时可加载模块，
+# 不影响首次起来的内核/initrd。这里只提示，下一次开机时 repair 分支会自动补编并重启 WiFi。
+if bcmdhd_needed && ! bcmdhd_ready; then
+    log "bcmdhd 模块暂缺，将在重启后自动补齐（不影响 eDP/系统启动）"
 fi
 
 # ---- 2. initrd.img + uInitrd（必须基于刚装好的补丁模块）----
@@ -342,6 +350,10 @@ ConditionPathIsMountPoint=/boot
 [Service]
 Type=oneshot
 ExecStart=/usr/local/sbin/zt1-kernel-sync --auto
+# 编译模块（bcmdhd 约 3~4 分钟）+ mkinitramfs 可能超过默认 90s 的 oneshot 超时，
+# 曾被 SIGTERM 打断（make 已终止）导致模块/initrd 未生成，务必放宽。
+TimeoutStartSec=1800
+TimeoutStopSec=120
 Nice=10
 IOSchedulingClass=idle
 EOF
