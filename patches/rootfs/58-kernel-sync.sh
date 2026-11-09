@@ -111,6 +111,49 @@ build_bcmdhd() {
     rm -rf "$bd"; return 1
 }
 
+# ---- initrd/uInitrd 是否「确实由我们基于补丁模块生成」----
+# 2026-11-09 教训：fnOS 内核包会自己生成官方 uInitrd，里面带原厂 analogix_dp.ko（initramfs 优先加载），
+# 只看「uInitrd 文件存在」会误判就绪 ⇒ 新内核 eDP 只有背光。这里用 marker 记录生成时的
+# 「补丁模块 md5 + uInitrd md5」，两者一致才算就绪。
+uintrd_ready() {
+    local mk="$BOOT/.zt1-uinitrd-$NEW.md5" mm mu
+    [ -f "$mk" ] || return 1
+    read -r mm mu < "$mk" || return 1
+    [ "$mm" = "$(md5sum "$KDIR/$MODREL/analogix_dp.ko" 2>/dev/null | cut -d' ' -f1)" ] || return 1
+    [ "$mu" = "$(md5sum "$BOOT/uInitrd-$NEW" 2>/dev/null | cut -d' ' -f1)" ] || return 1
+}
+build_uintrd() {
+    command -v mkinitramfs >/dev/null 2>&1 || die "缺少 mkinitramfs"
+    command -v mkimage     >/dev/null 2>&1 || die "缺少 mkimage（u-boot-tools）"
+    mkinitramfs -o "$BOOT/initrd.img-$NEW" "$NEW" >>"$LOG" 2>&1 || die "mkinitramfs 失败，不切换"
+    local MAGIC
+    MAGIC="$(od -An -tx1 -N4 "$BOOT/initrd.img-$NEW" | tr -d ' \n')"
+    case "$MAGIC" in
+        28b52ffd|1f8b*|fd377a58|04224d18|425a68*) : ;;
+        *) zstd -19 -f -q "$BOOT/initrd.img-$NEW" -o "$BOOT/initrd.img-$NEW.zst" \
+               && mv -f "$BOOT/initrd.img-$NEW.zst" "$BOOT/initrd.img-$NEW" \
+               || die "initrd 压缩失败" ;;
+    esac
+    local P="$BOOT/initrd.img-$NEW"
+    local CPIO_MAGIC
+    case "$MAGIC" in
+        1f8b*) CPIO_MAGIC="$(gzip -dc "$P" 2>/dev/null | head -c5)" ;;
+        fd377a58) CPIO_MAGIC="$(xzcat "$P" 2>/dev/null | head -c5)" ;;
+        04224d18) CPIO_MAGIC="$(lz4 -dc "$P" 2>/dev/null | head -c5)" ;;
+        425a68*) CPIO_MAGIC="$(bzip2 -dc "$P" 2>/dev/null | head -c5)" ;;
+        *) CPIO_MAGIC="$(zstdcat "$P" 2>/dev/null | head -c5)" ;;
+    esac
+    [ "${CPIO_MAGIC:0:4}" = "0707" ] || die "initrd 解开后不是 cpio（magic='$CPIO_MAGIC'），拒绝切换内核"
+    mkimage -A arm64 -O linux -T ramdisk -C none -d "$P" "$BOOT/uInitrd-$NEW" >>"$LOG" 2>&1 \
+        || die "mkimage 失败，不切换"
+    local PAYLOAD
+    PAYLOAD="$(od -An -tx1 -N4 -j64 "$BOOT/uInitrd-$NEW" | tr -d ' \n')"
+    [ "$PAYLOAD" = "$MAGIC" ] || die "uInitrd 头部载荷校验失败，不切换"
+    md5sum "$KDIR/$MODREL/analogix_dp.ko" "$BOOT/uInitrd-$NEW" 2>/dev/null \
+        | awk '{print $1}' | tr '\n' ' ' | sed 's/ $//' > "$BOOT/.zt1-uinitrd-$NEW.md5"
+    log "已生成 uInitrd-$NEW（marker：补丁模块 md5 + uInitrd md5）"
+}
+
 case "${1:-}" in
   --enable)  sed -i 's/^AUTOSYNC=.*/AUTOSYNC=1/' "$CONF" 2>/dev/null || echo 'AUTOSYNC=1' >> "$CONF"; say "已启用内核自动同步"; exit 0 ;;
   --disable) sed -i 's/^AUTOSYNC=.*/AUTOSYNC=0/' "$CONF" 2>/dev/null || echo 'AUTOSYNC=0' >> "$CONF"; say "已关闭内核自动同步"; exit 0 ;;
@@ -161,21 +204,38 @@ if [ -n "${CUR:-}" ] && [ -f "$CUR" ] && \
     SAME=1
 fi
 CORE_READY=0
-if patched_module && [ -f "$BOOT/uInitrd-$NEW" ]; then CORE_READY=1; fi
+if patched_module && uintrd_ready; then CORE_READY=1; fi
 if [ "$SAME" = 1 ] && [ "$CORE_READY" = 1 ] && bcmdhd_ready; then
     log "已是最新内核 $NEW（Image -> $(basename "$CUR")，补丁模块/bcmdhd/uInitrd 均已就绪）"; exit 0
 fi
 # 内核已切到 $NEW、eDP 模块与 uInitrd 都就绪，只差 bcmdhd（常见于换内核时编译被打断）：
 # 只补编 WiFi 驱动并重启 wifi 驱动服务，不重复切软链、不安排重启。
-if [ "$SAME" = 1 ] && [ "$CORE_READY" = 1 ] && ! bcmdhd_ready && bcmdhd_needed; then
-    log "内核已是 $NEW，但 bcmdhd 模块未就绪，仅补编译 WiFi 驱动（不切换/不重启）"
+if [ "$SAME" = 1 ] && patched_module && { [ "$CORE_READY" = 0 ] || ! bcmdhd_ready; }; then
+    log "内核已是 $NEW，但补丁/initrd/bcmdhd 有缺失，进入修复模式（已在运行该内核）"
     [ -d "$KDIR" ] || die "缺少 /lib/modules/$NEW"
     if [ ! -d "$HB" ]; then retry_later; die "缺少 linux-headers-$NEW，稍后重试"; fi
-    if build_bcmdhd; then
-        systemctl restart zt1-wifi-driver 2>/dev/null || true
-        log "bcmdhd 已补齐并重启 zt1-wifi-driver"
+    NEED_REBOOT=0
+    if uintrd_ready; then
+        log "uInitrd 就绪，跳过重生成"
     else
-        retry_later
+        log "uInitrd 缺失或非补丁版，重新生成（需要重启后生效）"
+        build_uintrd
+        ln -sfn "vmlinuz-$NEW" "$BOOT/Image"
+        ln -sfn "uInitrd-$NEW" "$BOOT/uInitrd"
+        NEED_REBOOT=1
+    fi
+    if ! bcmdhd_ready && bcmdhd_needed; then
+        if build_bcmdhd; then
+            systemctl restart zt1-wifi-driver 2>/dev/null || true
+            log "bcmdhd 已补齐并重启 zt1-wifi-driver"
+        else
+            retry_later
+        fi
+    fi
+    if [ "$NEED_REBOOT" = 1 ] && [ "$AUTOMODE" = 1 ] && [ "$REBOOT_AFTER_SYNC" = 1 ]; then
+        say "initrd 已更新，30 秒后自动重启以生效"
+        systemd-run --on-active=30 --collect --unit="zt1-ksync-reboot-$$" /bin/systemctl reboot \
+            >>"$LOG" 2>&1 || shutdown -r +1 "zt1-kernel-sync: initrd 更新" >>"$LOG" 2>&1 || true
     fi
     exit 0
 fi
@@ -231,41 +291,8 @@ if ! build_bcmdhd; then
     retry_later
 fi
 
-# ---- 2. initrd.img + uInitrd ----
-command -v mkinitramfs >/dev/null 2>&1 || die "缺少 mkinitramfs"
-command -v mkimage     >/dev/null 2>&1 || die "缺少 mkimage（u-boot-tools）"
-mkinitramfs -o "$BOOT/initrd.img-$NEW" "$NEW" >>"$LOG" 2>&1 || die "mkinitramfs 失败，不切换"
-# 注意：mkinitramfs 按 /etc/initramfs-tools/initramfs.conf 的 COMPRESS（本镜像=zstd）**已经压缩**，
-# 不能再压一次！2026-11-04 踩坑：二次 zstd 后内核报 "Initramfs unpacking failed: no cpio magic"
-# 直接 panic（VFS: Unable to mount root fs）。这里按 magic 判断，只有未压缩的 cpio 才压。
-PAYLOAD="$BOOT/initrd.img-$NEW"
-MAGIC="$(od -An -tx1 -N4 "$BOOT/initrd.img-$NEW" | tr -d ' \n')"
-case "$MAGIC" in
-    28b52ffd|1f8b*|fd377a58|04224d18|425a68*) : ;;   # 已压缩（zstd/gzip/xz/lz4/bzip2）
-    *) zstd -q -19 -f "$BOOT/initrd.img-$NEW" -o "$BOOT/initrd.img-$NEW.zst" >>"$LOG" 2>&1 \
-           || die "zstd 失败，不切换"
-       PAYLOAD="$BOOT/initrd.img-$NEW.zst" ;;
-esac
-log "initrd 格式 magic=$MAGIC（已压缩则直接打包，避免二次压缩）"
-# 切换前必须验证「解一层后就是 cpio」——2026-11-04 就是这里翻车：
-# 二次压缩导致内核 "Initramfs unpacking failed: no cpio magic" → panic → 板子开不了机。
-case "$MAGIC" in
-    28b52ffd) CPIO_MAGIC="$(zstdcat "$PAYLOAD" 2>/dev/null | head -c 6)" ;;
-    1f8b*)    CPIO_MAGIC="$(gzip -dc "$PAYLOAD" 2>/dev/null | head -c 6)" ;;
-    fd377a58) CPIO_MAGIC="$(xzcat "$PAYLOAD" 2>/dev/null | head -c 6)" ;;
-    *)        CPIO_MAGIC="$(head -c 6 "$PAYLOAD")" ;;
-esac
-case "$CPIO_MAGIC" in
-    07070*) : ;;
-    *) die "initrd 解开后不是 cpio（magic='$CPIO_MAGIC'），拒绝切换内核" ;;
-esac
-mkimage -A arm64 -O linux -T ramdisk -C none -n "uInitrd $NEW" \
-        -d "$PAYLOAD" "$BOOT/uInitrd-$NEW" >>"$LOG" 2>&1 || die "mkimage 失败，不切换"
-[ "$PAYLOAD" = "$BOOT/initrd.img-$NEW.zst" ] && rm -f "$BOOT/initrd.img-$NEW.zst"
-# 再确认 uInitrd 里是同一份载荷（uImage 头 64B）
-[ "$(dd if="$BOOT/uInitrd-$NEW" bs=1 skip=64 count=4 2>/dev/null | od -An -tx1 | tr -d ' \n')" = "$MAGIC" ] \
-    || die "uInitrd 头部载荷校验失败，不切换"
-log "已生成 $BOOT/uInitrd-$NEW（$(du -h "$BOOT/uInitrd-$NEW" | cut -f1)）"
+# ---- 2. initrd.img + uInitrd（必须基于刚装好的补丁模块）----
+build_uintrd
 
 # ---- 3. 切换软链（保留旧内核，可 --rollback）----
 echo "$(basename "$CUR")" > "$STATE/previous"
