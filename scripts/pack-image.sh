@@ -143,6 +143,19 @@ label fnos
     initrd /uInitrd
     append root=UUID=357e9eb7-73ea-4367-b981-6296a97687e0 rootwait rw rootfstype=btrfs rootflags=compress=zstd:1 console=ttyS2,1500000n8 console=tty0 quiet loglevel=3 systemd.show_status=0 net.ifnames=0 max_loop=128
 EOF
+# ---- 4.5 预置 zt1-kernel-sync marker（首次开机判定「已就绪」直接跳过，不重编不重启）----
+# zt1-kernel-sync 的 uintrd_ready 用 marker 记录「补丁版 analogix_dp.ko 的 md5 + uInitrd md5」。
+# 镜像里的 uInitrd 已由 prepare-boot.sh 替换成补丁版模块，这里直接把 marker 写好，避免首次
+# 开机走修复模式（mkinitramfs 重生成 initrd → 30s 自动重启，会打断进 Web 管理页的操作）。
+ADP="$ROOTFS/lib/modules/$KVER/kernel/drivers/gpu/drm/bridge/analogix/analogix_dp.ko"
+if [ -f "$ADP" ]; then
+    MM="$(md5sum "$ADP" | cut -d' ' -f1)"
+    UU="$(md5sum "$BOOT_SRC/uInitrd-$KVER" | cut -d' ' -f1)"
+    printf '%s %s\n' "$MM" "$UU" > "$BOOT_SRC/.zt1-uinitrd-$KVER.md5"
+    log "预置 kernel-sync marker: .zt1-uinitrd-$KVER.md5（补丁模块 $MM / uInitrd $UU）"
+else
+    warn "缺少 $ADP，无法预置 kernel-sync marker（首次开机会重编 initrd 并自动重启）"
+fi
 USED_MB=$(( $(du -sm "$BOOT_SRC" | cut -f1) ))
 log "boot 分区内容 ${USED_MB}MB / 分区 $(( BOOT_SIZE / 2048 ))MB"
 [ "$USED_MB" -lt $(( BOOT_SIZE / 2048 - 6 )) ] || die "boot 分区空间不足（内容 ${USED_MB}MB）"
