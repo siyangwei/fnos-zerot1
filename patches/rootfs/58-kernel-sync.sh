@@ -83,6 +83,34 @@ retry_later() {
     fi
 }
 
+# ---- bcmdhd（AP6256 WiFi 驱动）换内核后也必须重编，否则只能回退 brcmfmac ----
+BLIB="/usr/local/lib/zt1/bcmdhd"
+bcmdhd_needed() { [ -d "$BLIB/src" ] && [ -f "$BLIB/src/Makefile" ]; }
+bcmdhd_ready() {
+    [ -f "$BLIB/modules/$NEW/bcmdhd_sdio.ko" ] && \
+    [ -f "$BLIB/modules/$NEW/dhd_static_buf_sdio.ko" ]
+}
+build_bcmdhd() {
+    bcmdhd_needed || { log "跳过 bcmdhd 重编（$BLIB/src 缺失）"; return 0; }
+    local bd
+    bd="$(mktemp -d)"
+    cp -a "$BLIB/src"/. "$bd"/
+    if make -C "$HB" M="$bd" ARCH=arm64 \
+            CONFIG_BCMDHD_SDIO=y CONFIG_MACH_PLATFORM=y CONFIG_BCMDHD_DTS=y \
+            CONFIG_BCMDHD_OOB= CONFIG_BCMDHD_PCIE= CONFIG_BCMDHD_USB= \
+            modules >>"$LOG" 2>&1 \
+       && [ -f "$bd/bcmdhd_sdio.ko" ] && [ -f "$bd/dhd_static_buf_sdio.ko" ]; then
+        mkdir -p "$BLIB/modules/$NEW"
+        cp -f "$bd/bcmdhd_sdio.ko" "$bd/dhd_static_buf_sdio.ko" "$BLIB/modules/$NEW/"
+        strip --strip-debug "$BLIB/modules/$NEW/"*.ko 2>/dev/null || true
+        log "已安装 bcmdhd_sdio.ko 到 $BLIB/modules/$NEW"
+        rm -rf "$bd"; return 0
+    fi
+    log "警告: bcmdhd_sdio 编译失败（新内核 $NEW），WiFi 将回退 brcmfmac"
+    tail -10 "$bd/build.log" 2>/dev/null >> "$LOG" || true
+    rm -rf "$bd"; return 1
+}
+
 case "${1:-}" in
   --enable)  sed -i 's/^AUTOSYNC=.*/AUTOSYNC=1/' "$CONF" 2>/dev/null || echo 'AUTOSYNC=1' >> "$CONF"; say "已启用内核自动同步"; exit 0 ;;
   --disable) sed -i 's/^AUTOSYNC=.*/AUTOSYNC=0/' "$CONF" 2>/dev/null || echo 'AUTOSYNC=0' >> "$CONF"; say "已关闭内核自动同步"; exit 0 ;;
@@ -122,6 +150,7 @@ NEWF="$BOOT/vmlinuz-$NEW"
 # 因此这里额外校验「目标内核的 analogix_dp.ko 是否含我们的 zt1_ 补丁参数」+
 # 「/boot/uInitrd-<ver> 是否存在」，缺任意一项都要重做一遍（重编模块 + 重生成 initrd）。
 KDIR="/lib/modules/$NEW"
+HB="$KDIR/build"; [ -d "$HB" ] || HB="/usr/src/linux-headers-$NEW"
 patched_module() {
     local m="$KDIR/$MODREL/analogix_dp.ko"
     [ -f "$m" ] && strings "$m" 2>/dev/null | grep -q 'zt1_bpc'
@@ -131,16 +160,31 @@ if [ -n "${CUR:-}" ] && [ -f "$CUR" ] && \
    [ "$(md5sum < "$NEWF" | cut -d' ' -f1)" = "$(md5sum < "$CUR" | cut -d' ' -f1)" ]; then
     SAME=1
 fi
-if [ "$SAME" = 1 ] && patched_module && [ -f "$BOOT/uInitrd-$NEW" ]; then
-    log "已是最新内核 $NEW（Image -> $(basename "$CUR")，补丁模块与 uInitrd 均已就绪）"; exit 0
+CORE_READY=0
+if patched_module && [ -f "$BOOT/uInitrd-$NEW" ]; then CORE_READY=1; fi
+if [ "$SAME" = 1 ] && [ "$CORE_READY" = 1 ] && bcmdhd_ready; then
+    log "已是最新内核 $NEW（Image -> $(basename "$CUR")，补丁模块/bcmdhd/uInitrd 均已就绪）"; exit 0
+fi
+# 内核已切到 $NEW、eDP 模块与 uInitrd 都就绪，只差 bcmdhd（常见于换内核时编译被打断）：
+# 只补编 WiFi 驱动并重启 wifi 驱动服务，不重复切软链、不安排重启。
+if [ "$SAME" = 1 ] && [ "$CORE_READY" = 1 ] && ! bcmdhd_ready && bcmdhd_needed; then
+    log "内核已是 $NEW，但 bcmdhd 模块未就绪，仅补编译 WiFi 驱动（不切换/不重启）"
+    [ -d "$KDIR" ] || die "缺少 /lib/modules/$NEW"
+    if [ ! -d "$HB" ]; then retry_later; die "缺少 linux-headers-$NEW，稍后重试"; fi
+    if build_bcmdhd; then
+        systemctl restart zt1-wifi-driver 2>/dev/null || true
+        log "bcmdhd 已补齐并重启 zt1-wifi-driver"
+    else
+        retry_later
+    fi
+    exit 0
 fi
 if [ "$SAME" = 1 ]; then
-    log "Image 已指向 $NEW，但补丁模块或 uInitrd 未就绪（fnOS 自己改的软链？），补做同步"
+    log "Image 已指向 $NEW，但补丁模块/uInitrd/bcmdhd 未就绪（fnOS 自己改的软链？），补做同步"
 fi
 
 log "发现新内核 $NEW（当前 Image -> $(basename "${CUR:-无}")），开始同步"
 [ -d "$KDIR" ] || die "缺少 /lib/modules/$NEW"
-HB="$KDIR/build"; [ -d "$HB" ] || HB="/usr/src/linux-headers-$NEW"
 if [ ! -d "$HB" ]; then
     retry_later
     die "缺少 linux-headers-$NEW，不切换（避免新内核缺 eDP 修复）"
@@ -183,23 +227,8 @@ done
 depmod "$NEW" >/dev/null 2>&1 || log "警告: depmod $NEW 失败（不致命）"
 
 # ---- 1c. 重编 bcmdhd_sdio（AP6256 WiFi 驱动，换内核后必须按新内核重编）----
-BLIB=/usr/local/lib/zt1/bcmdhd
-if [ -d "$BLIB/src" ] && [ -f "$BLIB/src/Makefile" ]; then
-    bd="$(mktemp -d)"
-    cp -a "$BLIB/src"/. "$bd"/
-    if make -C "$HB" M="$bd" ARCH=arm64 CONFIG_BCMDHD_SDIO=y CONFIG_MACH_PLATFORM=y CONFIG_BCMDHD_DTS=y CONFIG_BCMDHD_OOB= CONFIG_BCMDHD_PCIE= CONFIG_BCMDHD_USB= modules >>"$LOG" 2>&1 \
-        && [ -f "$bd/bcmdhd_sdio.ko" ] && [ -f "$bd/dhd_static_buf_sdio.ko" ]; then
-        mkdir -p "$BLIB/modules/$NEW"
-        cp -f "$bd/bcmdhd_sdio.ko" "$bd/dhd_static_buf_sdio.ko" "$BLIB/modules/$NEW/"
-        strip --strip-debug "$BLIB/modules/$NEW/"*.ko 2>/dev/null || true
-        log "已安装 bcmdhd_sdio.ko 到 $BLIB/modules/$NEW"
-    else
-        log "警告: bcmdhd_sdio 编译失败（新内核 $NEW），WiFi 将回退 brcmfmac"
-        tail -10 "$bd/build.log" >> "$LOG" 2>/dev/null || true
-    fi
-    rm -rf "$bd"
-else
-    log "跳过 bcmdhd 重编（$BLIB/src 缺失）"
+if ! build_bcmdhd; then
+    retry_later
 fi
 
 # ---- 2. initrd.img + uInitrd ----
@@ -249,7 +278,9 @@ say "内核已切换：Image -> vmlinuz-$NEW，uInitrd -> uInitrd-$NEW（旧: $(
 # ---- 4. 自动模式且允许时，自动重启一次让新内核生效 ----
 # fnOS Web 更新会先自动重启一次（此时 Image 仍指旧内核），本服务随后才切换软链，
 # 所以这里再重启一次，用户不用手动操作即可进入新内核。
-if [ "$AUTOMODE" = 1 ] && [ "$REBOOT_AFTER_SYNC" = 1 ]; then
+if [ "$(uname -r)" = "$NEW" ]; then
+    say "当前运行内核已是 $NEW，无需重启"
+elif [ "$AUTOMODE" = 1 ] && [ "$REBOOT_AFTER_SYNC" = 1 ]; then
     say "按配置自动重启以启用新内核（REBOOT_AFTER_SYNC=1，30 秒后重启）"
     sync
     # 优先用 transient timer（独立于本服务，服务退出后仍会触发）
