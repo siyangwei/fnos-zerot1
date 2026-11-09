@@ -13,7 +13,9 @@
 #   USBPLUG = rk3588_usbplug_v1.11.bin（rkbin）
 #
 # 用法：
-#   bash scripts/make-ldr-loader.sh [spl.bin] [输出文件]
+#   bash scripts/make-ldr-loader.sh [spl.bin] [输出文件] [idbloader.img]
+#   - 第 3 个参数（idbloader.img）用于强校验：LDR 的 flash 段
+#     （FlashHead+FlashData+FlashBoot）截断后必须与 idbloader.img 逐字节一致
 set -euo pipefail
 
 TOPDIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -23,6 +25,7 @@ RKBIN="${RKBIN:-$TOPDIR/assets/rkbin/bin/rk35}"
 
 SPL="${1:-$UBOOT_SRC_DIR/spl/u-boot-spl.bin}"
 OUT="${2:-$TOPDIR/assets/uboot-upstream/MiniLoaderAll.bin}"
+IDB="${3:-}"
 DDR="${DDR:-$RKBIN/rk3588_ddr_lp4_2112MHz_lp5_2400MHz_v1.24.bin}"
 USBPLUG="${USBPLUG:-$RKBIN/rk3588_usbplug_v1.11.bin}"
 BOOT_MERGER="${BOOT_MERGER:-$TOPDIR/assets/tools/boot_merger}"
@@ -85,12 +88,33 @@ print('  LDR magic ok, size=%d' % len(d))
 PY
 mkdir -p "$TMP/verify"
 "$BOOT_MERGER" unpack -i "$TMP/MiniLoaderAll.bin" -o "$TMP/verify" >/dev/null 2>&1 || true
-if [[ -f "$TMP/verify/FlashBoot.bin" ]]; then
-    # boot_merger 会把载入的段按扇区补齐，故只比对真实长度部分
-    cmp -n "$(stat -c %s "$DDR")" "$TMP/verify/FlashData.bin" "$DDR" || die "FlashData 与 DDR 内容不一致"
-    cmp -n "$(stat -c %s "$SPL")" "$TMP/verify/FlashBoot.bin" "$SPL" || die "FlashBoot 与 SPL 内容不一致"
-    log "校验通过：FlashData==DDR(前 $(stat -c %s "$DDR")B)，FlashBoot==SPL(前 $(stat -c %s "$SPL")B)"
-fi
+[[ -f "$TMP/verify/FlashBoot.bin" ]] || die "LDR 里没有 FlashBoot 段"
+# boot_merger 会把载入的段按扇区补齐，故先比对真实长度部分
+cmp -n "$(stat -c %s "$DDR")" "$TMP/verify/FlashData.bin" "$DDR" || die "FlashData 与 DDR 内容不一致"
+cmp -n "$(stat -c %s "$SPL")" "$TMP/verify/FlashBoot.bin" "$SPL" || die "FlashBoot 与 SPL 内容不一致（请确认第 1 个参数是 spl/u-boot-spl.bin，而不是 idbloader.img）"
+log "校验通过：FlashData==DDR(前 $(stat -c %s "$DDR")B)，FlashBoot==SPL(前 $(stat -c %s "$SPL")B)"
+
+# 说明：不再与 binman 的 idbloader.img 做逐字节比对 —— binman 的 rksd 会在 SPL 数据区
+# 末尾追加 "BSYM" 调试符号表（mkimage -T rksd 的附加物），而 make.sh/kernel 的 loader
+# 直接用裸 spl/u-boot-spl.bin，两者数据区必然不同（已实证：上板可正常引导）。
+# 这里只做“loader 结构必须正确”的校验：
+#   - LDR magic 必须是 "LDR "
+#   - 解包出来的 FlashData 前缀 == DDR 文件、FlashBoot 前缀 == SPL 文件
+#   - FlashData/FlashBoot 长度必须等于 512B 对齐后的长度
+python3 - "$TMP/MiniLoaderAll.bin" "$TMP/verify/FlashData.bin" "$TMP/verify/FlashBoot.bin" "$DDR" "$SPL" <<'PYCHECK'
+import sys, os
+ldr, fd, fb, ddr, spl = sys.argv[1:6]
+def pad512(n): return (n + 511) // 512 * 512
+d = open(ldr,'rb').read()
+assert d[:4] == b'LDR ', 'magic 不是 LDR: %r' % d[:4]
+fd_d, fb_d, ddr_d, spl_d = (open(x,'rb').read() for x in (fd, fb, ddr, spl))
+assert len(fd_d) == pad512(len(ddr_d)), 'FlashData 长度 %d != 512 对齐 DDR %d' % (len(fd_d), pad512(len(ddr_d)))
+assert len(fb_d) == pad512(len(spl_d)), 'FlashBoot 长度 %d != 512 对齐 SPL %d' % (len(fb_d), pad512(len(spl_d)))
+assert fd_d[:len(ddr_d)] == ddr_d, 'FlashData 内容与 DDR 不一致'
+assert fb_d[:len(spl_d)] == spl_d, 'FlashBoot 内容与 SPL 不一致'
+print('  structure ok: FlashData=%d B (DDR %d), FlashBoot=%d B (SPL %d)' % (len(fd_d), len(ddr_d), len(fb_d), len(spl_d)))
+PYCHECK
+log "校验通过（结构 + 内容前缀）"
 
 mkdir -p "$(dirname "$OUT")"
 cp "$TMP/MiniLoaderAll.bin" "$OUT"

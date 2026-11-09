@@ -113,6 +113,6 @@ log "u-boot 产物已更新到 $OUT_DIR"
 
 # 生成 upgrade_tool uf 可用的 LDR loader（flash 段 == idbloader.img）
 log "生成 LDR loader（assets/uboot-upstream/MiniLoaderAll.bin）"
-bash "$(dirname "${BASH_SOURCE[0]}")/make-ldr-loader.sh" "$OUT_DIR/idbloader.img" "$OUT_DIR/MiniLoaderAll.bin"
+bash "$(dirname "${BASH_SOURCE[0]}")/make-ldr-loader.sh" "$UB_BUILD_DIR/spl/u-boot-spl.bin" "$OUT_DIR/MiniLoaderAll.bin" "$OUT_DIR/idbloader.img"
 ( cd "$OUT_DIR" && md5sum idbloader.img u-boot.itb u-boot-rockchip.bin MiniLoaderAll.bin > MD5SUMS )
 ls -l "$OUT_DIR"
