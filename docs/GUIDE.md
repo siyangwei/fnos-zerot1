@@ -43,7 +43,7 @@ output/fnos-aiot3588a-v1.1-update-<日期>.img   （RKFW，upgrade_tool uf 一�
 ```
 BootROM
   ↓  eMMC 0x40      idbloader.img     （binman: TPL(DDR) + SPL）
-  ↓  eMMC 0x4000    u-boot.itb        （FIT: BL31 v1.53 + U-Boot 2026.10 + DTB）
+  ↓  eMMC 0x4000    u-boot.itb        （FIT: BL31 v1.56 + U-Boot 2026.10 + DTB）
   ↓  bootstd 扫描所有分区 → extlinux bootmeth
   ↓  boot 分区(p4) /extlinux/extlinux.conf
   ↓  kernel = /Image（软链 → vmlinuz-<ver>）、initrd = /uInitrd、fdt = /dtb/rockchip/…dtb
@@ -51,9 +51,10 @@ BootROM
 fnOS（rootfs p5，按 UUID 挂载，不写死分区号）
 ```
 
-- **不写死 rootfs 分区**：U-Boot 侧打了一个补丁（`assets/uboot-upstream/src/0001-bootflow-scan-all-partitions.patch`），
-  去掉 `cmd/bootflow.c` 里的 `BOOTFLOWIF_ONLY_BOOTABLE`，让 bootstd 扫描全部 GPT 分区；
-  Rockchip `parameter.txt` 生成的 GPT 没有 legacy bootable 标志，否则只会扫到分区 1。
+- **不写死 rootfs 分区**：bootstd 默认只扫描带 legacy-bootable 属性的分区，因此我们在
+  `parameter.txt` 里给 boot 分区加了 `bootable` 标识（`0x00100000@0x00010000(boot:bootable)`），
+  bootstd 就能扫到 p4 的 `/extlinux/extlinux.conf`；root 由 `append root=UUID=…` 决定。
+  **U-Boot 源码保持上游 v2026.10 原样，不打任何补丁。**
 - u-boot 阶段不需要再修 CPLL：内核 dtsi 的 `assigned-clocks` 会把 `pll_cpll` 设成 1.5GHz、
   `clk_gmac_125m` 设成 125MHz（实测 Linux 侧 `clk_gmac_125m = 125000000`）。
 - **Linux 侧不做任何改动**，所以与 fnOS 官方内核/rootfs 完全兼容。

@@ -76,7 +76,7 @@ sudo ./scripts/build-all.sh         # 默认上游 U-Boot；UBOOT_MODE=vendor �
 
 - **[docs/GUIDE.md](docs/GUIDE.md) —— 详细说明（技术路线 / 引导链 / 功能细节 / 使用 / 分区 / 排错）**
 - [docs/BUILD.md](docs/BUILD.md) —— 构建细节与救砖
-- [docs/UBOOT.md](docs/UBOOT.md) —— 上游 U-Boot 适配（LDR 封装、bootflow 补丁）
+- [docs/UBOOT.md](docs/UBOOT.md) —— 上游 U-Boot 适配（LDR 封装、bootable 标识）
 - [docs/AUDIO.md](docs/AUDIO.md) —— ES8388 音频与 MCLK 门控
 - [docs/VPU.md](docs/VPU.md) —— 视频编解码（MPP/RGA）
 - [docs/CONFIG.md](docs/CONFIG.md) —— config.env 配置项

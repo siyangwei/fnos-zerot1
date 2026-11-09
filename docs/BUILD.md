@@ -198,14 +198,14 @@ fnOS 的 `trim` 包 postinst 每次升级都会 `systemctl enable resize-rootfs.
 
 | 位置 | 内容 |
 |---|---|
-| `assets/uboot-upstream/idbloader.img` | binman 产物：TPL(2122/2400 DDR) + SPL，写到 eMMC 0x40 |
-| `assets/uboot-upstream/u-boot.itb` | FIT：BL31 v1.53 + U-Boot + DTB，写到 eMMC 0x4000 |
+| `assets/uboot-upstream/idbloader.img` | binman 产物：TPL(2112/2400 DDR) + SPL，写到 eMMC 0x40 |
+| `assets/uboot-upstream/u-boot.itb` | FIT：BL31 v1.56 + U-Boot + DTB，写到 eMMC 0x4000 |
 | `assets/uboot-upstream/MiniLoaderAll.bin` | **LDR 封装**：厂商 USB 段 + 上游 idbloader 三段，供 `uf` 整包刷写 |
-| `assets/uboot-upstream/src/` | defconfig / 板级 dts / u-boot dtsi / bootflow 补丁 |
+| `assets/uboot-upstream/src/` | defconfig / 板级 dts / u-boot dtsi |
 
 要点：
 
-- 上游 bootstd + extlinux 自动扫描所有分区（`cmd/bootflow.c` 去掉 `BOOTFLOWIF_ONLY_BOOTABLE`，补丁在 `src/0001-…`），因此**不写死 rootfs 分区**，root 由 `extlinux.conf` 的 `append root=UUID=…` 决定。
+- 上游 bootstd + extlinux 自动扫描：`parameter.txt` 给 boot 分区带 `bootable` 标识，bootstd 才能扫到 `/extlinux/extlinux.conf`；**不写死 rootfs 分区**，root 由 `extlinux.conf` 的 `append root=UUID=…` 决定。
 - `uf` 的 loader 槽只接受 LDR 格式，`scripts/make-ldr-loader.sh` 会把上游 `idbloader.img` 重新封装成 LDR（生成 `assets/uboot-upstream/MiniLoaderAll.bin`），已做回读校验。
 - 构建：`sudo bash scripts/build-uboot-upstream.sh`（下载 tarball → 应用补丁 → 构建 → 生成 LDR → 更新 MD5SUMS）。
 - 打包：`UBOOT_MODE=upstream sudo -E bash scripts/pack-image.sh`。

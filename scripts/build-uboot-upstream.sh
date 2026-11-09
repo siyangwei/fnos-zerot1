@@ -94,15 +94,16 @@ cp -f "$SRC_DIR/zerot1-rk3588_defconfig" "$UB_BUILD_DIR/configs/"
 cp -f "$SRC_DIR/rk3588-aiot3588a.dts" "$UB_BUILD_DIR/dts/upstream/src/arm64/rockchip/"
 cp -f "$SRC_DIR/rk3588-aiot3588a-u-boot.dtsi" "$UB_BUILD_DIR/arch/arm/dts/"
 
-# 补丁：bootflow scan 默认只扫 legacy-bootable 分区，Rockchip parameter 生成的 GPT
-# 没有该标记，会导致 boot 分区被跳过（scan 出 0 bootflows）
+# 补丁：如需对 u-boot 源码打补丁，放到 assets/uboot-upstream/src/*.patch（按文件名顺序应用）
+# 注：当前不需要 bootflow 补丁——bootstd 只扫 legacy-bootable 分区，我们在 parameter.txt 里
+#     给 boot 分区打了 `(boot:bootable)` 标识（见 scripts/pack-image.sh），所以能正常扫到。
 for pf in "$SRC_DIR"/*.patch; do
     [ -f "$pf" ] || continue
-    if grep -q "zt1: Rockchip parameter 生成的 GPT" "$UB_BUILD_DIR/cmd/bootflow.c" 2>/dev/null; then
-        log "bootflow 补丁已存在，跳过: $(basename "$pf")"
-    else
+    if patch -p1 -d "$UB_BUILD_DIR" --dry-run --forward < "$pf" >/dev/null 2>&1; then
         log "应用补丁: $(basename "$pf")"
         patch -p1 -d "$UB_BUILD_DIR" < "$pf"
+    else
+        log "补丁已应用或冲突，跳过: $(basename "$pf")"
     fi
 done
 

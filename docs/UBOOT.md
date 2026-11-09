@@ -16,7 +16,7 @@
 ```
 BootROM
   ↓ eMMC 0x40      idbloader.img   （binman: TPL(rkbin DDR) + SPL）
-  ↓ eMMC 0x4000    u-boot.itb      （FIT: BL31 v1.53 + U-Boot 2026.10 + board DTB）
+  ↓ eMMC 0x4000    u-boot.itb      （FIT: BL31 v1.56 + U-Boot 2026.10 + board DTB）
   ↓ bootstd 扫描所有 bootdev/分区 → extlinux bootmeth
   ↓ boot 分区 /extlinux/extlinux.conf
       kernel /Image   （软链 → vmlinuz-<ver>）
@@ -29,10 +29,11 @@ fnOS rootfs（按 UUID 挂载，**不写死分区号**）
 
 ### 关键点
 
-1. **bootstd 全分区扫描补丁**（`assets/uboot-upstream/src/0001-bootflow-scan-all-partitions.patch`）：
-   `cmd/bootflow.c` 默认 `BOOTFLOWIF_ONLY_BOOTABLE`，只扫带 legacy bootable 属性的分区；
-   Rockchip `parameter.txt` 生成的 GPT 属性全是 0，导致只会扫分区 1（uboot）。
-   补丁改为 `flags = 0`，扫描所有分区后才找到 p4 的 `/extlinux/extlinux.conf`。
+1. **boot 分区 bootable 标识**（不打 u-boot 补丁）：`cmd/bootflow.c` 默认只扫带 legacy bootable
+   属性的分区；Rockchip `parameter.txt` 默认生成的 GPT 属性全是 0，boot 分区会被跳过。
+   我们在 `scripts/pack-image.sh` 的 CMDLINE 里给 boot 分区加了 `(boot:bootable)`，
+   由 `upgrade_tool` 写入 GPT 属性；bootstd 因此能扫到 p4 的 `/extlinux/extlinux.conf`。
+   **u-boot 源码保持上游原样，无需补丁。**
 2. **千兆时钟**：不需要在 u-boot 里改 CPLL。Linux 内核 dtsi 的 `assigned-clocks` 会把
    `pll_cpll` 设为 1.5GHz、`clk_gmac_125m` 设为 125MHz（实测 `125000000`）。
 3. **镜像内 `Image`/`uInitrd` 是软链**：U-Boot 的 ext4 驱动会解析最长 8 层软链，
@@ -45,7 +46,7 @@ fnOS rootfs（按 UUID 挂载，**不写死分区号**）
 
 ```
 boot_merger 厂商 ini（NEWIDB=true）
-  CODE471 = rk3588_ddr_lp4_2112MHz_lp5_2400MHz_v1.20.bin   （DDR 训练固件）
+  CODE471 = rk3588_ddr_lp4_2112MHz_lp5_2400MHz_v1.24.bin   （DDR 训练固件）
   CODE472 = rk3588_usbplug_v1.11.bin                       （MaskROM USB 通信）
   LOADER  = FlashData=DDR, FlashBoot=spl/u-boot-spl.bin    （上游 SPL）
         ↓

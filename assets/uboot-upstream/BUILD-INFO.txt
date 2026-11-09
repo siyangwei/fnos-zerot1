@@ -1,26 +1,23 @@
-u-boot 上游（upstream）实验构建
-==============================
+u-boot 上游（upstream）构建信息
+===============================
 源码:        u-boot v2026.10（GitHub u-boot/u-boot archive tarball）
 target:      本仓库自建 zerot1-rk3588_defconfig（src/zerot1-rk3588_defconfig）
              板级 dts: src/rk3588-aiot3588a.dts（复用 rk3588-nanopc-t6.dtsi）
              U-Boot 侧 u-boot dtsi: src/rk3588-aiot3588a-u-boot.dtsi
-             补丁: src/0001-bootflow-scan-all-partitions.patch
-                   （cmd/bootflow.c 去掉 BOOTFLOWIF_ONLY_BOOTABLE，让 bootstd
-                     扫描全部 GPT 分区，从而找到 boot 分区的 extlinux.conf）
+             补丁: 无（保持上游 v2026.10 原样）
+
 BL31:        rk3588_bl31_v1.56.elf（官方 rockchip-linux/rkbin master bin/rk35）
 ROCKCHIP_TPL: rk3588_ddr_lp4_2112MHz_lp5_2400MHz_v1.24.bin
-              （官方 rockchip-linux/rkbin master，LPDDR4 2112MHz / LPDDR5 2400MHz；
-               已入库 assets/rkbin/bin/rk35/）
+              （官方 rockchip-linux/rkbin master，LPDDR4 2112MHz / LPDDR5 2400MHz）
+USBPLUG:     rk3588_usbplug_v1.11.bin（官方 rkbin，用于生成 LDR）
 工具链:      Android prebuilts gcc-arm-10.2 aarch64-none-linux-gnu-
 构建日期:    2026-11-09
 
-产物:
+产物（MD5SUMS 为准）:
   idbloader.img         225280 B  (binman: TPL + SPL；刷 eMMC 0x40 扇区)
-  u-boot.itb           1329664 B  (FIT: BL31 + u-boot + DTB；刷 eMMC 0x4000 扇区)
-  MiniLoaderAll.bin     481728 B  (LDR 封装；由 scripts/make-ldr-loader.sh 用
-                                   boot_merger 的厂商 ini 流水线生成：NEWIDB=true，
-                                   CODE471=DDR、CODE472=usbplug、LOADER=DDR+SPL，
-                                   boot_merger 自动生成 RKNS FlashHead)
+  u-boot.itb           1329664 B  (FIT: BL31 v1.56 + u-boot + DTB；刷 eMMC 0x4000 扇区)
+  u-boot-rockchip.bin  9685504 B  (idbloader + u-boot.itb 合并版，SD 卡 64 扇区起)
+  MiniLoaderAll.bin     399808 B  (LDR 封装，供 upgrade_tool uf 一条命令刷写)
 
 关键配置:
   CONFIG_BAUDRATE=1500000（与本板串口 ttyS2 一致）
@@ -30,20 +27,26 @@ ROCKCHIP_TPL: rk3588_ddr_lp4_2112MHz_lp5_2400MHz_v1.24.bin
   PCIe/NVMe/EFI bootmgr 均关闭（U-Boot 阶段不需要，且本板 PCIe link fail 会卡住）
 
 引导方式（不写死分区）:
-  上游 u-boot 用 bootstd 扫描所有 bootdev（eMMC/SD/USB/网络），
-  在 boot 分区找到 /extlinux/extlinux.conf 后按其 label 启动；
-  root 由 extlinux.conf 的 append（root=UUID=...）决定。
+  bootstd 默认只扫描带 legacy-bootable 属性的分区，而 Rockchip parameter.txt 生成的
+  GPT 属性全为 0。因此本仓库在 parameter.txt 的 CMDLINE 里给 boot 分区加 bootable：
+      0x00100000@0x00010000(boot:bootable)
+  upgrade_tool 会把它写进 GPT 属性；bootstd 便能在 p4 找到 /extlinux/extlinux.conf，
+  root 由 extlinux.conf 的 append（root=UUID=...）决定，与分区号无关。
 
-LDR 封装说明（2026-11-09 实证）:
-  - 关键点：`uf` 的 loader 槽必须是 "LDR " 容器。用 boot_merger 的
-    `pack -1/-2/-3` 手工拼会得到 "BOOT" 魔术的容器 ⇒ uf 在 Download Boot 阶段失败。
-  - 正确做法：走厂商 ini 流水线（NEWIDB=true），由 boot_merger 生成 LDR 容器并
-    自动生成 RKNS FlashHead。实现在 `scripts/make-ldr-loader.sh`：
-      SPL   = spl/u-boot-spl.bin
-      DDR   = rk3588_ddr_lp4_2112MHz_lp5_2400MHz_v1.20.bin
+LDR 封装说明:
+  - uf 的 loader 槽必须是 "LDR " 容器；boot_merger pack -1/-2/-3 手工拼会得到
+    "BOOT" 魔术的容器 ⇒ uf 在 Download Boot 阶段失败。
+  - 正确做法：走厂商 ini 流水线（NEWIDB=true），由 boot_merger 生成 LDR 容器并自动
+    生成 RKNS FlashHead。实现在 scripts/make-ldr-loader.sh：
+      SPL     = spl/u-boot-spl.bin（142,982 B，对齐到 143,360）
+      DDR     = rk3588_ddr_lp4_2112MHz_lp5_2400MHz_v1.24.bin（79,443 B，对齐到 79,872）
       USBPLUG = rk3588_usbplug_v1.11.bin
-  - 已上板验证：`sudo upgrade_tool_2.45 uf output/fnos-aiot3588a-v1.1-update-20261109.img`
-    一条命令刷写成功，串口日志：
-      BL31 v1.53 → U-Boot 2026.10 → bootstd 扫描 mmc0 →
-      `0 extlinux ready mmc 4 mmc@fe2e0000.bootdev.part /extlinux/extlinux.conf`
-      → 启动 fnOS 6.18.18-trim 内核。
+  - 已做回读校验：拆 LDR 后 FlashData == DDR 前缀、FlashBoot == SPL 前缀。
+
+验证记录（2026-11-09，实板 AIOT-3588A V1.1）:
+  - 无补丁 + parameter bootable 标识：bootstd 扫到 p4 extlinux，正常启动；
+  - uf 整包刷写成功，串口日志：U-Boot SPL 2026.10 → BL31 v1.56 → U-Boot 2026.10
+    → 0 extlinux ready mmc 4 mmc@fe2e0000.bootdev.part /extlinux/extlinux.conf
+    → 启动 fnOS 6.18.18-trim 内核；
+  - 镜像：output/fnos-aiot3588a-v1.1-update-20261109.img
+    sha256 82480e7bbb1efc27786c3bef86ca6bef183a51f2e4cecbeeb29ee4d8db2d4ba8
