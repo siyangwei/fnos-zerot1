@@ -32,14 +32,17 @@ install -m 0644 "$SRC/analogix_dp_core.c" "$SRC/analogix_dp_core.h" \
                 "$SRC/analogix_dp_reg.c"  "$SRC/analogix_dp_reg.h" \
                 "$SRC/Makefile" "$ROOTFS/usr/local/lib/zt1/analogix-dp/"
 
-# ---- 1b. 其余 zeroT1 外挂模块源码（换内核后同样要重编，否则复位/看门狗修复失效）----
-install -d -m 0755 "$ROOTFS/usr/local/lib/zt1/rk806-rstfix" "$ROOTFS/usr/local/lib/zt1/smdt-mcu-wdt"
-install -m 0644 "$REPO/kernel-modules/rk806-rstfix/rk806_rstfix.c" \
-                "$REPO/kernel-modules/rk806-rstfix/Makefile" \
-                "$ROOTFS/usr/local/lib/zt1/rk806-rstfix/"
+# ---- 1b. 其余 zeroT1 外挂模块源码（换内核后同样要重编，否则看门狗修复失效）----
+install -d -m 0755 "$ROOTFS/usr/local/lib/zt1/smdt-mcu-wdt"
 install -m 0644 "$REPO/kernel-modules/smdt-mcu-wdt/smdt_mcu_wdt.c" \
                 "$REPO/kernel-modules/smdt-mcu-wdt/Makefile" \
                 "$ROOTFS/usr/local/lib/zt1/smdt-mcu-wdt/"
+
+# ---- 1c. 清理历史 rk806_rstfix 残留（RK806 复位模式已由 DTB rockchip,reset-mode=1 接管）----
+rm -f "$ROOTFS/etc/modules-load.d/zt1-rk806-rstfix.conf"
+rm -f "$ROOTFS"/usr/lib/modules/*/updates/zerot1/rk806_rstfix.ko
+rm -f "$ROOTFS"/lib/modules/*/updates/zerot1/rk806_rstfix.ko
+rm -rf "$ROOTFS/usr/local/lib/zt1/rk806-rstfix"
 
 # ---- 2. 同步脚本 ----
 install -d -m 0755 "$ROOTFS/usr/local/sbin" "$ROOTFS/etc/zerot1" "$ROOTFS/var/lib/zt1-kernel-sync"
@@ -274,8 +277,8 @@ cp -f "$BD/analogix_dp.ko" "$MODDIR/analogix_dp.ko"
 depmod "$NEW" >/dev/null 2>&1 || log "警告: depmod $NEW 失败（不致命）"
 log "已安装 eDP 修复模块到 $MODDIR"
 
-# ---- 1b. 重编 zeroT1 外挂模块（RK806 PMIC 复位修复 / MCU 看门狗）----
-for pair in rk806-rstfix:rk806_rstfix smdt-mcu-wdt:smdt_mcu_wdt; do
+# ---- 1b. 重编 zeroT1 外挂模块（MCU 看门狗）----
+for pair in smdt-mcu-wdt:smdt_mcu_wdt; do
     md="${pair%%:*}"; ko="${pair##*:}"; sd="/usr/local/lib/zt1/$md"
     [ -d "$sd" ] || { log "跳过 $md（源码缺失）"; continue; }
     bd="$(mktemp -d)"

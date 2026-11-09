@@ -238,7 +238,8 @@ fnOS 的「系统更新」是按包 `dpkg` 安装的，会把新内核写进 `/b
 本镜像自带 `zt1-kernel-sync`（`/usr/local/sbin/`，systemd service + path 触发，默认 `AUTOSYNC=1`）：
 Web 更新装上新内核后，它会自动
 
-1. 用新内核的 `linux-headers` 重编三个外挂模块：`analogix_dp.ko`（eDP 点亮）、`rk806_rstfix.ko`（PMIC 复位→重启）、`smdt_mcu_wdt.ko`（板载 MCU 看门狗）；
+1. 用新内核的 `linux-headers` 重编两个外挂模块：`analogix_dp.ko`（eDP 点亮）、`smdt_mcu_wdt.ko`（板载 MCU 看门狗）；
+   （RK806 PMIC 复位模式已由板级 DTB 的 `rockchip,reset-mode = <1>` 交给内核原生驱动处理，不再需要 `rk806_rstfix.ko`）
 2. `mkinitramfs` + `mkimage` 生成 `uInitrd-<ver>`；
 3. 把 `Image` / `uInitrd` 软链切到新内核（旧内核保留，可回滚）。
 

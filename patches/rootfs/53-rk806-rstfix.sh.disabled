@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
+# 【已停用 · .disabled】2026-11 起由板级 DTB 的 rockchip,reset-mode = <1> 接管。
+#   实测（mainline U-Boot v2026.10 + 内核 6.18.18）：RST_FUN=2/0 挂死、=1 可重启；
+#   内核 rk8xx-core.c 原生支持 rockchip,reset-mode 属性（u-boot 写 2 后内核改回 1），
+#   故不再需要本 ko。文件保留仅作历史与回退参考，patch-rootfs.sh 不会执行 .disabled。
+#
 # 53-rk806-rstfix.sh —— 修「Linux 软件重启卡死 / Web 重启不可用」（RK806 PMIC 复位模式）
 #
 # 现象：systemctl reboot / 飞牛 Web 重启 → systemd-shutdown 打完 `Rebooting.` 后串口静默、

@@ -863,6 +863,16 @@
 
 		system-power-controller;
 
+		/* RK806 复位模式：1 = RESET（整板复位，与厂商 pmic-reset-func=<1> 一致）。
+		 * 本板（mainline u-boot v2026.10 + 内核 6.18.18）实测三种取值：
+		 *   RST_FUN=2（u-boot 无该属性时默认写 RESET_NOTIFY）→ warm reboot 挂死；
+		 *   RST_FUN=0（RESTART PMU，上游 tiger/jaguar 用的值）→ 同样挂死，只能断电；
+		 *   RST_FUN=1 → 能重启，但 BL31→PMIC 复位路径耗时约 86s
+		 *              （systemd 关机只花 4s，慢在复位；已排除 systemd stop job 与 MCU 看门狗）。
+		 * 故仍需 56-fast-reboot.sh 的 CRU GLB_SRST_FST 钩子，把整次重启压到 ~15s。
+		 * 内核 rk8xx-core.c 原生支持该属性，不再需要 rk806_rstfix.ko。 */
+		rockchip,reset-mode = <1>;
+
 		vcc1-supply = <&vcc4v0_sys>;
 		vcc2-supply = <&vcc4v0_sys>;
 		vcc3-supply = <&vcc4v0_sys>;
