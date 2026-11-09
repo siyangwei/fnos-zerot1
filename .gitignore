@@ -1,6 +1,10 @@
 # 构建产物
 /work/
 /output/
+
+# 本地下载缓存与临时目录（不参与构建，也不入库）
+/download/
+/tmp/
 # 产物镜像只在 output/work 下；assets/uboot.img（4MB，定制 u-boot）必须入库
 /output/*.img
 /work/**/*.img

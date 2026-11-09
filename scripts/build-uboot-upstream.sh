@@ -32,7 +32,17 @@ UB_SRC_URL="${UB_SRC_URL:-https://github.com/u-boot/u-boot/archive/refs/tags/${U
 UB_BUILD_DIR="${UB_BUILD_DIR:-$WORK_DIR/u-boot-${UB_VER#v}}"
 BL31="${BL31:-$HERE/../assets/rkbin/bin/rk35/rk3588_bl31_v1.56.elf}"
 ROCKCHIP_TPL="${ROCKCHIP_TPL:-$HERE/../assets/rkbin/bin/rk35/rk3588_ddr_lp4_2112MHz_lp5_2400MHz_v1.24.bin}"
-CROSS_COMPILE="${CROSS_COMPILE:-/home/zero/work/rk35xx-android14/prebuilts/gcc/linux-x86/aarch64/gcc-arm-10.2-2020.11-x86_64-aarch64-none-linux-gnu/bin/aarch64-none-linux-gnu-}"
+# 交叉编译器：优先 CROSS_COMPILE 环境变量 → 系统 aarch64-linux-gnu- → Android prebuilts gcc10.2
+if [ -z "${CROSS_COMPILE:-}" ]; then
+    if command -v aarch64-linux-gnu-gcc >/dev/null 2>&1; then
+        CROSS_COMPILE="aarch64-linux-gnu-"
+    elif [ -x "/home/zero/work/rk35xx-android14/prebuilts/gcc/linux-x86/aarch64/gcc-arm-10.2-2020.11-x86_64-aarch64-none-linux-gnu/bin/aarch64-none-linux-gnu-gcc" ]; then
+        CROSS_COMPILE="/home/zero/work/rk35xx-android14/prebuilts/gcc/linux-x86/aarch64/gcc-arm-10.2-2020.11-x86_64-aarch64-none-linux-gnu/bin/aarch64-none-linux-gnu-"
+    else
+        die "找不到 aarch64 交叉编译器，请设置 CROSS_COMPILE"
+    fi
+fi
+export CROSS_COMPILE
 SRC_DIR="$HERE/../assets/uboot-upstream/src"
 OUT_DIR="$HERE/../assets/uboot-upstream"
 

@@ -117,8 +117,10 @@ sudo upgrade_tool_2.45 rd
 ### 重编厂商 u-boot（可选）
 
 ```bash
+# 源码树放本仓库 work/ 下（不入库），不要 clone 到仓库根目录
+cd /path/to/fnos-zerot1/work
 git clone https://github.com/friendlyarm/uboot-rockchip -b nanopi6-v2017.09
-cd uboot-rockchip && git apply /path/to/fnos-zerot1/patches/uboot/0001-*.patch
+cd uboot-rockchip && git apply ../../patches/uboot/0001-*.patch
 ./make.sh nanopi6        # 产物 uboot.img 放回 assets/uboot.img
 ```
 

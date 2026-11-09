@@ -127,6 +127,7 @@ assets/                 预编译产物（u-boot、定制内核模块、打包�
   uboot.img               厂商定制 u-boot（UBOOT_MODE=vendor 时使用，4MB）
   tools/boot_merger       Rockchip loader 打包工具（生成 LDR 用）
   modules/6.18.18-trim/   analogix_dp.ko / brcmfmac 三件套 / smdt_mcu_wdt.ko
+  bcmdhd/                 bcmdhd WiFi 驱动（模块 + 源码 + 固件，默认 WiFi 驱动）
   adbd-ss-shim/           libadbd_ss_shim.so（adb SuperSpeed 描述符 shim）
   tools/                  mkupdate.sh / resource_tool 等 Rockchip 打包工具
 dts/mainline-6.18/      板级设备树（rk3588-aiot3588a.dts + usbdev 变体）
@@ -138,6 +139,21 @@ docs/                   构建/音频/U-Boot/VPU 说明
 .github/workflows/      GitHub Actions 自动构建
 config.env.example      构建配置模板（复制为 config.env 后填写；含密码，不入库）
 ```
+
+**目录与缓存约定**（同一个项目只放一个文件夹，避免散落）：
+
+| 目录 | 内容 | 是否入库 |
+|---|---|---|
+| `assets/` | 实际使用的预编译产物（我们的上游 u-boot/idbloader/LDR、rkbin、bcmdhd、内核模块、打包工具） | 是 |
+| `work/` | 本机构建工作区（解包出的 rootfs、内核包缓存、u-boot/内核源码树、中间产物） | 否（gitignore） |
+| `download/` | 下载缓存（大 tar 包等），可随时删除 | 否（gitignore） |
+| `tmp/` | 临时文件 | 否（gitignore） |
+
+说明：fnOS 使用的内核是 ophub 官方 `6.18.18-trim` 预编译包（`scripts/prepare-boot.sh` 下载并解包，缓存放
+`work/kernel-fnos/`），本仓库**不存放内核源码树**；u-boot 不是友善 vendor 树，而是上游 U-Boot v2026.10
+（源码与产物在 `assets/uboot-upstream/`）。早期曾放在仓库根目录的 `kernel-rockchip/`、`uboot-rockchip/`、
+`rkbin/` 是旧路线的中间源码树，与实际使用的不是同一份，已删除；需要重建时按 `scripts/build-uboot-upstream.sh`
+自动下载到 `work/` 下即可。
 
 构建脚本：
 
