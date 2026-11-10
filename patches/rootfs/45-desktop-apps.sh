@@ -29,18 +29,29 @@ if [ -f "$ROOTFS/usr/share/applications/chromium.desktop" ]; then
 fi
 
 # ---------- 2. mpv 作为默认播放器 ----------
+# RK3588 的 Mali EGL/GBM 在 Xorg（AccelMethod none，软件渲染）下不可用：
+#   mpv 默认 vo=gpu 会 "Failed to create GBM surface" → libplacebo 初始化失败
+#   → pseudo-gui 模式直接段错误（exit 139），双击文件无窗口无反应。
+# 修复：强制 vo=x11（CPU 软件渲染，1080p 播放足够；硬解仍可用 --hwdec=rkmpp）。
+mkdir -p "$ROOTFS/etc/mpv"
+cat > "$ROOTFS/etc/mpv/mpv.conf" << 'MPVCONF'
+# zeroT1(RK3588)：Mali EGL/GBM 在 Xorg(AccelMethod none) 下不可用，
+# vo=gpu 初始化失败会让 mpv 0.35.1 pseudo-gui 模式段错误 ⇒ 强制 x11 软件渲染。
+vo=x11
+MPVCONF
 cat > "$ROOTFS/usr/share/applications/mpv.desktop" << 'MPVDESK'
 [Desktop Entry]
 Type=Application
 Name=mpv Media Player
 Comment=Play movies and songs
-Exec=mpv --player-operation-mode=pseudo-gui -- %U
+Exec=mpv --vo=x11 --player-operation-mode=pseudo-gui -- %U
 Terminal=false
 Icon=mpv
 Categories=AudioVideo;Video;Audio;Player;
 MimeType=video/mp4;video/x-matroska;video/quicktime;video/webm;audio/mpeg;audio/flac;audio/ogg;audio/wav;audio/x-wav;audio/mp4;video/x-msvideo;
 MPVDESK
 chmod +x "$ROOTFS/usr/share/applications/mpv.desktop"
+log "[45-desktop] mpv 强制 vo=x11（规避 Mali EGL/GBM 段错误）"
 
 # ---------- 3. fnOS 管理界面快捷方式 ----------
 mkdir -p "$ROOTFS/root/桌面" "$ROOTFS/usr/share/applications"
