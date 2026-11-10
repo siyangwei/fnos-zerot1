@@ -128,18 +128,20 @@ assets/                 预编译产物（u-boot、定制内核模块、打包�
   uboot-upstream/         上游 U-Boot v2026.10：idbloader.img / u-boot.itb / LDR MiniLoaderAll.bin / src 源码
   uboot.img               厂商定制 u-boot（UBOOT_MODE=vendor 时使用，4MB）
   tools/boot_merger       Rockchip loader 打包工具（生成 LDR 用）
-  modules/6.18.18-trim/   analogix_dp.ko / brcmfmac 三件套 / smdt_mcu_wdt.ko
+  modules/6.18.18-trim/   analogix_dp.ko / brcmfmac 三件套 / smdt_mcu_wdt.ko / tcpm.ko
   bcmdhd/                 bcmdhd WiFi 驱动（模块 + 源码 + 固件，默认 WiFi 驱动）
   adbd-ss-shim/           libadbd_ss_shim.so（adb SuperSpeed 描述符 shim）
   tools/                  mkupdate.sh / resource_tool 等 Rockchip 打包工具
 dts/mainline-6.18/      板级设备树（只有 rk3588-aiot3588a.dts）
-kernel-modules/         out-of-tree 模块源码（analogix-dp、smdt-mcu-wdt）
+kernel-modules/         out-of-tree 模块完整源码（analogix-dp、smdt-mcu-wdt、tcpm-defer-fix）
+patches/kernel/6.18.18/ 内核补丁记录（diff 形式，不参与构建，供审阅/移植参考）
 patches/rootfs/         构建时对 rootfs 做的全部改动（按文件名顺序执行）
 archive/                淘汰备案（旧 dtb 变体、厂商 u-boot 补丁、停用脚本/模块，不参与构建）
 scripts/                构建脚本（见下）
 docs/                   构建/音频/U-Boot/VPU 说明
 .github/workflows/      GitHub Actions 自动构建
 config.env.example      构建配置模板（复制为 config.env 后填写；含密码，不入库）
+AGENTS.md               项目规范与编译约定（目录职责/改动流程/禁止事项，动手前先读）
 ```
 
 **目录与缓存约定**（同一个项目只放一个文件夹，避免散落）：
@@ -152,10 +154,11 @@ config.env.example      构建配置模板（复制为 config.env 后填写；�
 | `tmp/` | 临时文件 | 否（gitignore） |
 
 说明：fnOS 使用的内核是 ophub 官方 `6.18.18-trim` 预编译包（`scripts/prepare-boot.sh` 下载并解包，缓存放
-`work/kernel-fnos/`），本仓库**不存放内核源码树**；u-boot 不是友善 vendor 树，而是上游 U-Boot v2026.10
-（源码与产物在 `assets/uboot-upstream/`）。早期曾放在仓库根目录的 `kernel-rockchip/`、`uboot-rockchip/`、
-`rkbin/` 是旧路线的中间源码树，与实际使用的不是同一份，已删除；需要重建时按 `scripts/build-uboot-upstream.sh`
-自动下载到 `work/` 下即可。
+`work/kernel-fnos/`），本仓库**不存放内核源码树**；对内核驱动的修改以 `kernel-modules/` 里的完整源码重编同名
+`.ko` 覆盖（initramfs 与 rootfs 各一份），`patches/kernel/` 只保存对应 diff 记录、**不参与构建**。u-boot 不是
+友善 vendor 树，而是上游 U-Boot v2026.10（板级源文件在 `assets/uboot-upstream/src/`，产物与源码缓存同目录）。
+早期曾放在仓库根目录的 `kernel-rockchip/`、`uboot-rockchip/`、`rkbin/` 是旧路线的中间源码树，与实际使用的不是
+同一份，已删除；需要重建时按 `scripts/build-uboot-upstream.sh` 自动下载到 `work/` 下即可。
 
 构建脚本：
 
@@ -163,8 +166,10 @@ config.env.example      构建配置模板（复制为 config.env 后填写；�
 |---|---|
 | `scripts/build-all.sh` | 一键：rootfs → 内核/initramfs → 设备树 → 打包（支持 `SKIP_*` 单步加速） |
 | `scripts/build-rootfs.sh` | 从 ophub 底稿镜像提取 rootfs，逐条执行 `patches/rootfs/*.sh` |
-| `scripts/prepare-boot.sh` | 下载 fnOS 内核包，生成 `Image`/`uInitrd`（替换 analogix_dp.ko） |
+| `scripts/prepare-boot.sh` | 下载 fnOS 内核包，生成 `Image`/`uInitrd`（替换 analogix_dp.ko + tcpm.ko，预置 kernel-sync marker） |
 | `scripts/build-dts.sh` | 下载内核源码中必要的 dts 头文件，cpp + dtc 编译板级 dtb |
+| `scripts/build-analogix-dp.sh` | 单独重编 eDP 模块（`kernel-modules/analogix-dp-6.18.18/`）并放入 `assets/modules/` |
+| `scripts/check-upstream.py` | 检查上游 U-Boot / 内核是否有新版本（辅助） |
 | `scripts/normalize-ownership.sh` | 修正 rootfs 属主（否则 postgres/ssh 会在新镜像里坏掉） |
 | `scripts/pack-image.sh` | 组装 boot/rootfs/resource 分区并打包 `update.img` |
 | `scripts/uinitrd-tool.py` | 解析/替换/重打包 initramfs（legacy uImage + zstd） |
