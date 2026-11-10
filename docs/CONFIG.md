@@ -53,7 +53,7 @@ cp config.env.example config.env   # 填自己的 WiFi 与 root 密码（可留�
 Secret 留空时对应项保持 `config.env.example` 里的空值（镜像仍可用，只是不会自动连 WiFi、
 root 密码回落到默认 `root`）。**不要**把真实密码写进 `config.env.example` 或任何仓库文件。
 
-## Type-C 角色切换（tcpm 原生，自动）
+## Type-C 角色切换（tcpm 原生，自动 + defer 修复模块）
 
 本板 Type-C（唯一 OTG 口）角色由内核 tcpm（`fcs,fusb302` + `usb-role-switch`）**原生自动切换**，
 无需任何用户态命令：
@@ -68,6 +68,22 @@ DTS 两处关键修复（见 `dts/mainline-6.18/rk3588-aiot3588a.dts` 注释）�
    tcpm 从 connector 的 fwnode 遍历不到，`port->role_sw` 为 NULL，内核永不切角色）；
 2. 删除 `&usbdp_phy1` 误绑的 `phy-supply = <&vbus5v0_typec>`（否则 PHY 上电即打开 Type-C VBUS，
    fusb302 报 VBUSOK=1 → tcpm 认为 `vbus_vsafe0v=false` → U 盘场景永远卡在 `SRC_ATTACH_WAIT`）。
+
+**第三个修复：tcpm defer 外挂模块**（`kernel-modules/tcpm-defer-fix/`，2026-11-10）
+
+主线 tcpm 在 `tcpm_register_port()` 里用 `IS_ERR_OR_NULL()` 把 `fwnode_usb_role_switch_get()`
+返回的 `-EPROBE_DEFER` 也吞掉了：dwc3 的 usb_role_switch 比 fusb302 晚注册时，probe 仍"成功"但
+`port->role_sw == NULL`，之后只在 sysfs 更新 data_role 显示、从不切 dwc3，**同一镜像不同重启
+结果随机**（有时 host 正常、有时永远 device）。补丁把 defer 透传出去让驱动核心重试。
+
+⚠️ 部署位置很关键：fnOS 官方 `uInitrd` 的 **initramfs 里打包了原厂 tcpm.ko**，开机 ~2.3s 的
+initramfs 阶段就抢先加载，rootfs 里 `updates/zt1/tcpm.ko` 永远不会生效（这是最初"修复不生效"
+的真正原因）——与 eDP analogix_dp 同一个坑。因此：
+
+- 镜像：`scripts/prepare-boot.sh` 用 `uinitrd-tool.py repack --replace` 把修复版 tcpm.ko 换进
+  uInitrd；`patches/rootfs/58-kernel-sync.sh` 同时覆盖 rootfs 的 kernel 路径；
+- 板端换内核：`zt1-kernel-sync` 重编 tcpm.ko 后覆盖 `$KDIR/kernel/drivers/usb/typec/tcpm/tcpm.ko`
+  （并保留 `updates/zerot1/` 副本），kernel-sync marker 新增第三位校验该模块 md5。
 
 > 旧方案（`zt1-usb-role` 覆盖 dtb 切角色、`zt1-otg-autoswitch` 用户态守护）已归档到
 > `archive/rootfs/`，不再安装。

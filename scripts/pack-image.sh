@@ -132,15 +132,24 @@ label fnos
     append root=UUID=357e9eb7-73ea-4367-b981-6296a97687e0 rootwait rw rootfstype=btrfs rootflags=compress=zstd:1 console=ttyS2,1500000n8 console=tty0 quiet loglevel=3 systemd.show_status=0 net.ifnames=0 max_loop=128
 EOF
 # ---- 4.5 预置 zt1-kernel-sync marker（首次开机判定「已就绪」直接跳过，不重编不重启）----
-# zt1-kernel-sync 的 uintrd_ready 用 marker 记录「补丁版 analogix_dp.ko 的 md5 + uInitrd md5」。
-# 镜像里的 uInitrd 已由 prepare-boot.sh 替换成补丁版模块，这里直接把 marker 写好，避免首次
-# 开机走修复模式（mkinitramfs 重生成 initrd → 30s 自动重启，会打断进 Web 管理页的操作）。
+# zt1-kernel-sync 的 uintrd_ready 用 marker 记录「补丁版 analogix_dp.ko 的 md5 + uInitrd md5
+# + tcpm defer 修复模块 md5（2026-11-10 新增，旧两位 marker 向后兼容）」。
+# 镜像里的 uInitrd 已由 prepare-boot.sh 替换成补丁版模块（analogix_dp + tcpm），这里直接把
+# marker 写好，避免首次开机走修复模式（mkinitramfs 重生成 initrd → 30s 自动重启，会打断进
+# Web 管理页的操作）。
 ADP="$ROOTFS/lib/modules/$KVER/kernel/drivers/gpu/drm/bridge/analogix/analogix_dp.ko"
+TCPM="$ROOTFS/lib/modules/$KVER/kernel/drivers/usb/typec/tcpm/tcpm.ko"
 if [ -f "$ADP" ]; then
     MM="$(md5sum "$ADP" | cut -d' ' -f1)"
     UU="$(md5sum "$BOOT_SRC/uInitrd-$KVER" | cut -d' ' -f1)"
-    printf '%s %s\n' "$MM" "$UU" > "$BOOT_SRC/.zt1-uinitrd-$KVER.md5"
-    log "预置 kernel-sync marker: .zt1-uinitrd-$KVER.md5（补丁模块 $MM / uInitrd $UU）"
+    if [ -f "$TCPM" ] && [ "$(modinfo -F version "$TCPM" 2>/dev/null)" = "zt1-defer-fix" ]; then
+        TT="$(md5sum "$TCPM" | cut -d' ' -f1)"
+        printf '%s %s %s\n' "$MM" "$UU" "$TT" > "$BOOT_SRC/.zt1-uinitrd-$KVER.md5"
+        log "预置 kernel-sync marker: .zt1-uinitrd-$KVER.md5（补丁模块 $MM / uInitrd $UU / tcpm $TT）"
+    else
+        printf '%s %s\n' "$MM" "$UU" > "$BOOT_SRC/.zt1-uinitrd-$KVER.md5"
+        warn "rootfs 里 tcpm.ko 不是 defer 修复版（$TCPM），marker 仅写两位（首次开机会补同步并重启一次）"
+    fi
 else
     warn "缺少 $ADP，无法预置 kernel-sync marker（首次开机会重编 initrd 并自动重启）"
 fi

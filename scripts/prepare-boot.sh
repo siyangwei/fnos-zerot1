@@ -5,11 +5,13 @@
 #   fnOS 官方内核包  6.18.18-rockchip.tar.gz（ophub/fnnas release `kernel_fnnas`）
 #                    内含 boot/dtb/modules/header 四个子包；本脚本只用 boot 子包。
 #   assets/modules/6.18.18-trim/analogix_dp.ko  我们自编译的 eDP 驱动
+#   assets/modules/6.18.18-trim/tcpm.ko         我们打了 defer 修复的 Type-C tcpm
 #
 # 输出（$FNOS_BOOT，供 scripts/pack-image.sh 直接拷进 boot 分区）：
 #   Image       <- vmlinuz-6.18.18-trim（fnOS 官方内核，带 trimafs/zfs/rk_vcodec）
-#   uInitrd     <- 官方 uInitrd，但把里面的 analogix_dp.ko 换成我们改过的版本
-#                  （eDP 在启动早期就由 initramfs 里的模块驱动，只改 rootfs 不生效）
+#   uInitrd     <- 官方 uInitrd，但把里面的 analogix_dp.ko / tcpm.ko 换成我们改过的版本
+#                  （eDP 与 Type-C 角色切换都在启动早期由 initramfs 里的模块驱动，
+#                   只改 rootfs 不生效；tcpm 旧版还会吞掉 -EPROBE_DEFER 导致角色切换随机失效）
 #   config / System.map  <- 留档，便于排查
 #
 # 用法：
@@ -31,6 +33,7 @@ KPKG_URL="${KERNEL_PKG_URL:-https://github.com/ophub/fnnas/releases/download/ker
 KPKG="${KERNEL_PKG:-$WORK_DIR/kernel-fnos/6.18.18-rockchip.tar.gz}"
 FNOS_BOOT="${FNOS_BOOT:-$WORK_DIR/boot-fnos}"
 ANALOGIX_KO="$ASSETS_DIR/modules/$KVER/analogix_dp.ko"
+TCPM_KO="$ASSETS_DIR/modules/$KVER/tcpm.ko"
 
 # ---- 1. 取得内核包 ----
 if [ -d "$KPKG" ]; then
@@ -75,10 +78,13 @@ if [ "${SKIP_UINITRD_PATCH:-0}" = "1" ]; then
     cp -f "$SRC_UINITRD" "$FNOS_BOOT/uInitrd"
 else
     [ -f "$ANALOGIX_KO" ] || die "缺少 $ANALOGIX_KO（先构建或从 assets 恢复）"
+    [ -f "$TCPM_KO" ] || die "缺少 $TCPM_KO（tcpm defer 修复模块，先构建或从 assets 恢复）"
     log "替换 uInitrd 内的 analogix_dp.ko（md5 $(md5sum "$ANALOGIX_KO" | cut -d' ' -f1)）"
+    log "替换 uInitrd 内的 tcpm.ko（md5 $(md5sum "$TCPM_KO" | cut -d' ' -f1)）"
     need_root   # initramfs 含设备节点，解包需要 root
     python3 "$HERE/uinitrd-tool.py" repack "$SRC_UINITRD" "$FNOS_BOOT/uInitrd" \
-        --replace "usr/lib/modules/$KVER/kernel/drivers/gpu/drm/bridge/analogix/analogix_dp.ko=$ANALOGIX_KO"
+        --replace "usr/lib/modules/$KVER/kernel/drivers/gpu/drm/bridge/analogix/analogix_dp.ko=$ANALOGIX_KO" \
+        --replace "usr/lib/modules/$KVER/kernel/drivers/usb/typec/tcpm/tcpm.ko=$TCPM_KO"
 fi
 
 # 官方内核包里的这些命名带版本号，boot 分区里不需要（u-boot 按固定名加载）

@@ -38,6 +38,22 @@ install -m 0644 "$REPO/kernel-modules/smdt-mcu-wdt/smdt_mcu_wdt.c" \
                 "$REPO/kernel-modules/smdt-mcu-wdt/Makefile" \
                 "$ROOTFS/usr/local/lib/zt1/smdt-mcu-wdt/"
 
+# ---- 1b2. tcpm defer 修复（Type-C 角色切换，见 kernel-modules/tcpm-defer-fix/README.md）----
+# initramfs 与 rootfs 里的原厂 tcpm.ko 都会抢先生效，所以镜像内直接预置修复版：
+#   - /boot/uInitrd 里的副本由 scripts/prepare-boot.sh 用 --replace 替换
+#   - rootfs 的 kernel 路径在这里覆盖；换内核后由 zt1-kernel-sync 重编再覆盖
+KVER="${KVER:-6.18.18-trim}"
+install -d -m 0755 "$ROOTFS/usr/local/lib/zt1/tcpm-defer-fix"
+install -m 0644 "$REPO/kernel-modules/tcpm-defer-fix/tcpm.c" \
+                "$REPO/kernel-modules/tcpm-defer-fix/Makefile" \
+                "$ROOTFS/usr/local/lib/zt1/tcpm-defer-fix/"
+if [ -f "$REPO/assets/modules/$KVER/tcpm.ko" ] && [ -d "$ROOTFS/lib/modules/$KVER" ]; then
+    tcpm_kdir="$ROOTFS/lib/modules/$KVER/kernel/drivers/usb/typec/tcpm"
+    install -d -m 0755 "$tcpm_kdir" "$ROOTFS/lib/modules/$KVER/updates/zerot1"
+    install -m 0644 "$REPO/assets/modules/$KVER/tcpm.ko" "$tcpm_kdir/tcpm.ko"
+    install -m 0644 "$REPO/assets/modules/$KVER/tcpm.ko" "$ROOTFS/lib/modules/$KVER/updates/zerot1/tcpm.ko"
+fi
+
 # ---- 1c. 清理历史 rk806_rstfix 残留（RK806 复位模式已由 DTB rockchip,reset-mode=1 接管）----
 rm -f "$ROOTFS/etc/modules-load.d/zt1-rk806-rstfix.conf"
 rm -f "$ROOTFS"/usr/lib/modules/*/updates/zerot1/rk806_rstfix.ko
@@ -119,14 +135,19 @@ build_bcmdhd() {
 # 只看「uInitrd 文件存在」会误判就绪 ⇒ 新内核 eDP 只有背光。这里用 marker 记录生成时的
 # 「补丁模块 md5 + uInitrd md5」，两者一致才算就绪。
 uintrd_ready() {
-    local mk="$BOOT/.zt1-uinitrd-$NEW.md5" mm mu
+    local mk="$BOOT/.zt1-uinitrd-$NEW.md5" mm mu tt
     [ -f "$mk" ] || return 1
-    read -r mm mu < "$mk" || true
+    read -r mm mu tt < "$mk" || true
     # 2026-11-09 教训2：marker 末尾若无换行，bash 的 read 在 EOF 未遇换行会返回 1，
     # 曾导致每次开机都误判 initrd 未就绪 → 无限重启循环。这里按内容非空判断。
     [ -n "$mm" ] && [ -n "$mu" ] || return 1
     [ "$mm" = "$(md5sum "$KDIR/$MODREL/analogix_dp.ko" 2>/dev/null | cut -d' ' -f1)" ] || return 1
     [ "$mu" = "$(md5sum "$BOOT/uInitrd-$NEW" 2>/dev/null | cut -d' ' -f1)" ] || return 1
+    # 第三位 = tcpm defer 修复模块 md5（2026-11-10 新增）。旧 marker 只有两位，
+    # 缺少 tt 时跳过以保持向后兼容（升级后首次同步会重写成三位）。
+    if [ -n "$tt" ]; then
+        [ "$tt" = "$(md5sum "$KDIR/kernel/drivers/usb/typec/tcpm/tcpm.ko" 2>/dev/null | cut -d' ' -f1)" ] || return 1
+    fi
 }
 build_uintrd() {
     command -v mkinitramfs >/dev/null 2>&1 || die "缺少 mkinitramfs"
@@ -155,12 +176,17 @@ build_uintrd() {
     local PAYLOAD
     PAYLOAD="$(od -An -tx1 -N4 -j64 "$BOOT/uInitrd-$NEW" | tr -d ' \n')"
     [ "$PAYLOAD" = "$MAGIC" ] || die "uInitrd 头部载荷校验失败，不切换"
-    local MK="$BOOT/.zt1-uinitrd-$NEW.md5" MM UU
+    local MK="$BOOT/.zt1-uinitrd-$NEW.md5" MM UU TT
     MM="$(md5sum "$KDIR/$MODREL/analogix_dp.ko" 2>/dev/null | cut -d' ' -f1)"
     UU="$(md5sum "$BOOT/uInitrd-$NEW" 2>/dev/null | cut -d' ' -f1)"
+    TT="$(md5sum "$KDIR/kernel/drivers/usb/typec/tcpm/tcpm.ko" 2>/dev/null | cut -d' ' -f1)"
     [ -n "$MM" ] && [ -n "$UU" ] || die "marker 计算失败，不切换"
-    printf '%s %s\n' "$MM" "$UU" > "$MK"
-    log "已生成 uInitrd-$NEW（marker：补丁模块 md5 + uInitrd md5）"
+    if [ -n "$TT" ]; then
+        printf '%s %s %s\n' "$MM" "$UU" "$TT" > "$MK"
+    else
+        printf '%s %s\n' "$MM" "$UU" > "$MK"
+    fi
+    log "已生成 uInitrd-$NEW（marker：补丁模块 md5 + uInitrd md5 + tcpm md5）"
 }
 
 case "${1:-}" in
@@ -293,6 +319,27 @@ for pair in smdt-mcu-wdt:smdt_mcu_wdt; do
     fi
     rm -rf "$bd"
 done
+
+# ---- 1b2. 重编 tcpm defer 修复模块（Type-C 角色切换；必须覆盖 kernel 路径原文件，
+#         因为 initramfs/rootfs 里原厂 tcpm.ko 会抢先生效）----
+TCLIB="/usr/local/lib/zt1/tcpm-defer-fix"
+if [ -d "$TCLIB" ]; then
+    bd="$(mktemp -d)"
+    cp -a "$TCLIB"/. "$bd"/
+    if make -C "$HB" M="$bd" ARCH=arm64 modules >"$bd/build.log" 2>&1 && [ -f "$bd/tcpm.ko" ]; then
+        strip --strip-debug "$bd/tcpm.ko" 2>/dev/null || true
+        tk="$KDIR/kernel/drivers/usb/typec/tcpm"; mkdir -p "$tk"
+        [ -f "$tk/tcpm.ko" ] && cp -f "$tk/tcpm.ko" "$STATE/tcpm.ko.$NEW.bak"
+        cp -f "$bd/tcpm.ko" "$tk/tcpm.ko"
+        mkdir -p "$KDIR/updates/zerot1"
+        cp -f "$bd/tcpm.ko" "$KDIR/updates/zerot1/tcpm.ko"
+        log "已安装 tcpm defer 修复模块到 $tk/tcpm.ko"
+    else
+        log "警告: tcpm.ko 编译失败（新内核 $NEW），Type-C 角色切换可能随机失效"
+        tail -10 "$bd/build.log" >> "$LOG"
+    fi
+    rm -rf "$bd"
+fi
 depmod "$NEW" >/dev/null 2>&1 || log "警告: depmod $NEW 失败（不致命）"
 
 # ---- 1c. bcmdhd 推迟到二次重启后由「修复模式」补齐 ----
