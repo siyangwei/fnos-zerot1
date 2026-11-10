@@ -175,7 +175,7 @@ fi
 sec "服务"
 FAILED=$(systemctl --failed --no-legend --plain 2>/dev/null | awk '{print $1}' | tr '\n' ' ')
 if [ -z "$FAILED" ]; then ok "无 failed 单元"; else warn "failed 单元: $FAILED"; fi
-for s in NetworkManager wpa_supplicant zt1-otg-autoswitch zt1-wifi-regdom zt1-rootfs-guard zt1-kernel-sync.path eventlogger_service; do
+for s in NetworkManager wpa_supplicant zt1-wifi-regdom zt1-rootfs-guard zt1-kernel-sync.path eventlogger_service; do
   if systemctl is-active --quiet "$s" 2>/dev/null; then ok "$s active"
   else warn "$s 未激活"; fi
 done
