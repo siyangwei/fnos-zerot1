@@ -34,7 +34,7 @@ sudo upgrade_tool_2.45 uf fnos-aiot3588a-v1.1-update-YYYYMMDD.img
 
 | 目录 | 内容 | 入库 | 修改后要做 |
 |---|---|---|---|
-| `assets/` | 预编译产物：上游 u-boot（`uboot-upstream/`，含 `src/` 板级源文件）、厂商 `uboot.img`、内核模块 ko（`modules/<ver>/`）、bcmdhd、rkbin、Rockchip 打包工具 | ✅ | 改源码后重新编译产物并更新到这里 |
+| `assets/` | 预编译产物：上游 u-boot（`uboot-upstream/`，含 `src/` 板级源文件）、厂商 `uboot.img`、内核模块 ko（`modules/<ver>/`）、bcmdhd、adbd-ss-shim（`.so` + 源码）、rkbin、Rockchip 打包工具 | ✅ | 改源码后重新编译产物并更新到这里 |
 | `dts/mainline-6.18/` | 内核板级设备树（只有主 dts；host/usbdev 变体已归档） | ✅ | `./scripts/build-dts.sh`，然后重打镜像 |
 | `kernel-modules/` | out-of-tree 模块**完整源码**：`analogix-dp-6.18.18/`（eDP）、`smdt-mcu-wdt/`（MCU 看门狗）、`tcpm-defer-fix/`（Type-C defer 修复） | ✅ | 编译 → 更新 `assets/modules/<ver>/`；同步 patch 记录 |
 | `patches/kernel/<ver>/` | **内核补丁记录**（0001 analogix、0002 tcpm）：给人看的 diff，**不参与构建** | ✅ | 改模块时重新 `diff -u` 更新 |

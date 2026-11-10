@@ -14,7 +14,7 @@ fnOS 内核（6.18.18-trim）的 `composite.c` 在 USB3 速度下只统计 `c->s
 所以之前只能在 gadget 里强制 `max_speed=high-speed`（USB2 480M）。
 
 ## 解法
-`tools/adbd-ss-shim/adbd_ss_shim.c`：LD_PRELOAD 小 shim，拦截 adbd 对
+`assets/adbd-ss-shim/adbd_ss_shim.c`：LD_PRELOAD 小 shim，拦截 adbd 对
 `/dev/usb-ffs/adb/ep0` 的 `write()`：
 
 - 识别 v1 描述符块（magic=1, length, fs_count, hs_count + FS 描述符 + HS 描述符）；
@@ -38,6 +38,7 @@ fnOS 内核（6.18.18-trim）的 `composite.c` 在 USB3 速度下只统计 `c->s
 - `adb devices` 正常；`adb push` 200MB 约 18.4MB/s（受限于老 adbd 协议包大小，不是链路；链路 5Gbps）
 
 ## 重新编译
+    cd assets/adbd-ss-shim
     gcc -shared -fPIC -O2 -o libadbd_ss_shim.so adbd_ss_shim.c -ldl
 （板上验证时可直接在 zeroT1 上编译；构建机交叉编译时用同一套 aarch64 工具链）
 

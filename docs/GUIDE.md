@@ -130,7 +130,7 @@ assets/                 预编译产物（u-boot、定制内核模块、打包�
   tools/boot_merger       Rockchip loader 打包工具（生成 LDR 用）
   modules/6.18.18-trim/   analogix_dp.ko / brcmfmac 三件套 / smdt_mcu_wdt.ko / tcpm.ko
   bcmdhd/                 bcmdhd WiFi 驱动（模块 + 源码 + 固件，默认 WiFi 驱动）
-  adbd-ss-shim/           libadbd_ss_shim.so（adb SuperSpeed 描述符 shim）
+  adbd-ss-shim/           libadbd_ss_shim.so + adbd_ss_shim.c 源码（adb SuperSpeed 描述符 shim）
   tools/                  mkupdate.sh / resource_tool 等 Rockchip 打包工具
 dts/mainline-6.18/      板级设备树（只有 rk3588-aiot3588a.dts）
 kernel-modules/         out-of-tree 模块完整源码（analogix-dp、smdt-mcu-wdt、tcpm-defer-fix）

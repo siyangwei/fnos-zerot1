@@ -42,7 +42,7 @@ log "[48-adb] /usr/bin/adbd 已安装"
 # 厂商 adbd 是 android-tools 4.2.2（Android 4.2 时代）编译出来的，只会给 FunctionFS
 # 写 v1 描述符（FS+HS），没有 SuperSpeed 描述符集合 => composite 在 SS 下 c->superspeed=0
 # => bNumConfigurations=0 => 主机报 "no configurations, error -22"，只能退到 USB2（480M）。
-# 这里装一个 LD_PRELOAD 小 shim（源码 tools/adbd-ss-shim/adbd_ss_shim.c，板上 gcc 编译）：
+# 这里装一个 LD_PRELOAD 小 shim（源码 assets/adbd-ss-shim/adbd_ss_shim.c，板上 gcc 编译）：
 # 拦截 adbd 对 ep0 的 write()，把 v1 描述符块改写成 v2（magic=3, flags=FS|HS|SS，
 # 附带 fs_count/hs_count/ss_count 三个计数字段），SS 段 = 接口描述符 + 每个端点
 # （wMaxPacketSize=1024 的 SS 端点描述符 + 端点伴随描述符）。改完主机就能按 USB3.0 枚举。
