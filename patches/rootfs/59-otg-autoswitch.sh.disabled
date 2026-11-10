@@ -1,10 +1,20 @@
 #!/bin/bash
-# 59-otg-autoswitch.sh —— Type-C(OTG) 口 device/host 自动切换
+# 59-otg-autoswitch.sh —— （已停用）Type-C(OTG) 口 device/host 自动切换
 #
-# 背景：本板唯一 Type-C 口的 CC/PD 由 fusb302 管理，但 fnOS 内核的 typec/tcpm
-# 不工作（无 partner、无状态机日志、不会自动切 dwc3 角色），因此默认只能手动
-# 切。本补丁用用户态轮询 fusb302 STATUS0 + xhci 设备表，配合 dwc3 debugfs 的
-# mode 实现「插入 U 盘自动切 host、拔掉自动回 device」。
+# 【2026-11-10 停用】根因已修复，tcpm 原生驱动可自动切角色，本用户态脚本不再
+# 需要，保留文件仅作历史参考：
+#   1) DTS 中 &usbdp_phy1 的 phy-supply = <&vbus5v0_typec> 错误地把 Type-C VBUS
+#      输出绑成 PHY 电源，usbdp_phy1 power_on 时把 VBUS 5V 打开，fusb302 读到
+#      VBUSOK=1 → tcpm 认为 vbus_vsafe0v=false → sink(U盘) 插入卡在 SRC_ATTACH_WAIT。
+#      删除该绑定后 tcpm 正常 SRC_ATTACH_WAIT → SRC_ATTACHED → vbus:=1 → U 盘枚举。
+#   2) tcpm 的 role switch fwnode 需挂在 connector 子节点下（见 DTS usbc0_con
+#      的 port@2 端点），旧 DTS 挂在 usb-typec@22 下导致 role_sw=NULL。
+#   实测：U 盘插入自动切 host（sda 枚举+挂载），PC 插入自动切 device（adb 可用）。
+#
+# 原始背景（历史）：本板唯一 Type-C 口的 CC/PD 由 fusb302 管理，但当时 fnOS 内核的
+# typec/tcpm 不工作（无 partner、无状态机日志、不会自动切 dwc3 角色），因此默认
+# 只能手动切。本补丁用用户态轮询 fusb302 STATUS0 + xhci 设备表，配合 dwc3 debugfs
+# 的 mode 实现「插入 U 盘自动切 host、拔掉自动回 device」。
 #
 # 依赖：i2c-tools（读取 fusb302）、/sys/kernel/debug/usb/fc000000.usb/mode
 # 停用：/etc/zerot1/otg.conf 里 AUTOSWITCH=0，或 systemctl disable zt1-otg-autoswitch
@@ -111,7 +121,7 @@ rebind_adbd() {
 
 log "autoswitch 启动（事件驱动）"
 irq_read; last_irq=$cur_irq
-last_fallback=$(date +%s)
+uptime_s; last_fallback=$t
 last_rebind=0
 device_since=0
 host_since=0
@@ -123,7 +133,7 @@ pending_check=0
 has_sink=-1
 st0=""
 if [ -e "$MODE_FILE" ] && read mode < "$MODE_FILE" && [ "$mode" = "device" ] && ! gadget_bound; then
-  rebind_adbd; device_since=$(date +%s)
+  rebind_adbd; uptime_s; device_since=$t
 fi
 while :; do
   if [ -f "$STAMP" ]; then
@@ -192,7 +202,7 @@ while :; do
       retry_done=1
       log "host 无设备 ${elapsed}s，VBUS 断电复位重试"
       vbus_cycle
-      host_since=$(date +%s)
+      host_since=$t
     elif [ "$n" -eq 0 ] && [ "$elapsed" -ge 8 ]; then
       empty_streak=$((empty_streak + 1))
     else
@@ -201,7 +211,7 @@ while :; do
     if [ "$empty_streak" -ge 2 ]; then
       empty_streak=0; host_since=0; retry_done=0
       if echo device > "$MODE_FILE" 2>/dev/null; then
-        device_since=$(date +%s); armed=0; log "host→device（无设备）"
+        device_since=$t; armed=0; log "host→device（无设备）"
         gadget_bound || rebind_adbd
       fi
     fi

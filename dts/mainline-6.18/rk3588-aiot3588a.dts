@@ -738,25 +738,6 @@
 		vbus-supply = <&vbus5v0_typec>;
 		status = "okay";
 
-		/* Type-C 角色切换（host/device）。
-		 * 注意：原厂（vendor 6.18 内核）把 usb-role-switch 的 graph 端点
-		 * 挂在 typec 端口节点本身，而不是 connector 下面；挂到 connector
-		 * 下会导致 dwc3 的 role-switch 一直 waiting_for_supplier，
-		 * /sys/class/usb_role/.../role 不存在、无法从用户态切角色。
-		 */
-		ports {
-			#address-cells = <1>;
-			#size-cells = <0>;
-
-			port@0 {
-				reg = <0>;
-				usbc0_role_sw: endpoint@0 {
-					reg = <0>;
-					remote-endpoint = <&usb_host0_xhci_drd_sw>;
-				};
-			};
-		};
-
 		usbc0_con: connector {
 			compatible = "usb-c-connector";
 			data-role = "dual";
@@ -784,6 +765,24 @@
 					reg = <1>;
 					usbc0_sbu: endpoint {
 						remote-endpoint = <&usbdp_phy0_typec_sbu>;
+					};
+				};
+
+				/* Type-C 角色切换（host/device）必须挂在本 connector
+				 * 节点下面：fusb302 驱动（fusb302_fwnode_get）把
+				 * tcpm 设备的 fwnode 指向 connector 子节点，tcpm 再通过
+				 * connector 的 graph 端点找 dwc3 的 usb-role-switch。
+				 * 端点挂在 usb-typec@22 节点本身下时 tcpm 找不到
+				 * role switch（port->role_sw = NULL），只会更新
+				 * /sys/class/typec/port0/data_role 而不真正切换 dwc3，
+				 * 这也是此前只能靠用户态脚本写 debugfs mode 的原因。
+				 * 注：usb_role 的 sysfs role 文件不存在属正常现象——
+				 * dwc3 注册 role switch 时未设 allow_userspace_control。
+				 */
+				port@2 {
+					reg = <2>;
+					usbc0_role_sw: endpoint {
+						remote-endpoint = <&usb_host0_xhci_drd_sw>;
 					};
 				};
 			};
@@ -1473,7 +1472,11 @@
 };
 
 &usbdp_phy1 {
-	phy-supply = <&vbus5v0_typec>;
+	/* 原厂 DTS 误把 Type-C VBUS 输出（vbus5v0_typec）当成 PHY 供电。
+	 * PHY 电源来自 SoC 内部 PMIC，phy-supply 会在 power_on 时打开
+	 * Type-C VBUS 5V，导致 fusb302 VBUSOK=1、tcpm 认为 vbus_vsafe0v=false，
+	 * U 盘（sink）插入后卡在 SRC_ATTACH_WAIT 无法切 host。
+	 * 删除该绑定，VBUS 改由 tcpm 在 SRC_ATTACHED 时通过 fusb302 控制。 */
 	status = "okay";
 };
 
