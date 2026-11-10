@@ -87,7 +87,7 @@ bootcmd 写死「从 0x40 处读 SPL、直连 /Image」，升级/换布局都很
 | 音频 | ES8388：喇叭 + 耳机，插入耳机自动切输出（SARADC 检测）；首启即有声（MCLK 门控已修） |
 | 有线网络 | 千兆，实测 950 / 1015 Mbps 双向、md5 一致 |
 | 无线 | BCM43455（AP6256）2.4G/5G，**支持 5G DFS 信道**（ch52-64/100-144，实测 5320MHz 稳定；镜像默认 `WIFI_COUNTRY=US` 并在 NetworkManager 前由 `zt1-wifi-regdom.service` 设置法规域——CN/world 域下固件不扫描 DFS，是国内 5G 搜不到的根因）；蓝牙 BCM4345C5（可搜索/连接） |
-| USB | **adb over USB3.0 SuperSpeed**（bcdUSB 0x0320、5Gbps 链路）；唯一 Type-C（OTG）口**自动识别 device/host**：插 U 盘约 1.5s 自动切主机并挂载（host 模式为 USB2 480Mbps）、拔掉约 9s 自动回 device（adb 可用），也可 `zt1-usb-role status\|auto\|device\|host [--reboot\|--now]` 手动切；2 个标准 USB-A（3.0/2.0）+ 6 路插针 USB 均正常 |
+| USB | **adb over USB3.0 SuperSpeed**（bcdUSB 0x0320、5Gbps 链路）；唯一 Type-C（OTG）口由内核 tcpm **原生自动切换 device/host**：插 U 盘自动切主机并挂载（host 模式为 USB2 480Mbps）、插 PC 自动切 device（adb 可用）；2 个标准 USB-A（3.0/2.0）+ 6 路插针 USB 均正常 |
 | 存储 | btrfs rootfs（固定 5.6GB；**已用 dpkg-divert + `zt1-rootfs-guard` 永久禁止 fnOS 更新后自动扩容**）；剩余空间在 fnOS Web「存储空间」里建存储池；boot 分区 ext4 512MB（版本化内核 + `Image`/`uInitrd` 符号链接，与 fnOS 官方一致） |
 | SD/TF 卡 | 板载 SD 控制器可用：**SDR104 198MHz**，实测顺序读 **86.9 MB/s**（`GPIO0_B7` 电源极性已修） |
 | 系统更新 | Web「更新和还原」可正常更新（已验证 1.1.31 → 1.2.1000、内核 c1196）；`zt1-kernel-sync` 自动重编板级模块、切内核并自动重启一次 |
@@ -109,8 +109,7 @@ bootcmd 写死「从 0x40 处读 SPL、直连 /Image」，升级/换布局都很
 - HDMI1 必须接在 VOP **VP2** 上（设备树已固定），否则与 eDP 同时启用时黑屏。
 - adb 传输速度约 18 MB/s，受厂商 adbd（android-tools 4.2.2）协议限制，链路本身 5Gbps。
 - **WiFi 5G 搜不到**：若你的 5G 热点在 DFS 信道（常见 ch52-64/100-144），请确认 `/etc/zerot1/config.env` 里 `WIFI_COUNTRY="US"`（默认即是）；改成 `CN` 会失去 DFS 扫描能力。最省事的替代方案是把路由器 5G 固定到非 DFS 信道（36-48 或 149-165）。
-- Type-C（唯一 OTG 口）**自动识别**：`zt1-otg-autoswitch` 守护进程每 0.5s 读 fusb302 `STATUS0`（`0x82`=CC 上挂着 sink 设备）+ xhci 设备表，自动写 dwc3 debugfs 的 `mode` 完成 device↔host 切换。原因：fnOS 内核的 typec/tcpm 不工作（无 partner、无状态机日志，`waiting_for_supplier`），内核不会自己切角色，所以用用户态补上这一层。
-- 手动/持久切换仍可用：`sudo zt1-usb-role host --now`（本次开机立即生效，不改 dtb）、`sudo zt1-usb-role host --reboot`（改 dtb 持久）；`status` 看当前 dtb 角色与运行时 mode。手动切后 10 分钟内自动切换不干预。
+- Type-C（唯一 OTG 口）**自动识别**：由内核 tcpm（fusb302 + usb-role-switch）原生切换，插 U 盘/键鼠自动 host 并挂载，插 PC 自动 device（adb）。2026-11-10 修好：DTS 把 role_sw 端点挂到 connector 的 `port@2`，并删掉 `&usbdp_phy1` 误绑的 `phy-supply = <&vbus5v0_typec>`（否则 VBUS 常开，U 盘场景卡在 `SRC_ATTACH_WAIT`）。旧的 `zt1-usb-role` / `zt1-otg-autoswitch` 用户态方案已归档到 `archive/rootfs/`。
 - 注意：Type-C 在 **host 模式下只跑 USB2 480Mbps**（该口 USB3 SS 通道未起来；厂商 Ubuntu 用同一颗 PHY
   在 host 模式可达 5Gbps，说明硬件支持、差异在 typec/phy 配置），大文件建议用标准 USB-A 3.0 口。
 - 安装「Mali GPU Driver」后，Mali 的 `libgbm/libEGL` 会通过 `/etc/ld.so.conf.d/00-aarch64-mali.conf`
@@ -133,10 +132,10 @@ assets/                 预编译产物（u-boot、定制内核模块、打包�
   bcmdhd/                 bcmdhd WiFi 驱动（模块 + 源码 + 固件，默认 WiFi 驱动）
   adbd-ss-shim/           libadbd_ss_shim.so（adb SuperSpeed 描述符 shim）
   tools/                  mkupdate.sh / resource_tool 等 Rockchip 打包工具
-dts/mainline-6.18/      板级设备树（rk3588-aiot3588a.dts + usbdev 变体）
+dts/mainline-6.18/      板级设备树（只有 rk3588-aiot3588a.dts）
 kernel-modules/         out-of-tree 模块源码（analogix-dp、smdt-mcu-wdt）
 patches/rootfs/         构建时对 rootfs 做的全部改动（按文件名顺序执行）
-patches/uboot/          定制 u-boot 的源码补丁（记录如何从友善 u-boot 生成 assets/uboot.img）
+archive/                淘汰备案（旧 dtb 变体、厂商 u-boot 补丁、停用脚本/模块，不参与构建）
 scripts/                构建脚本（见下）
 docs/                   构建/音频/U-Boot/VPU 说明
 .github/workflows/      GitHub Actions 自动构建
@@ -280,7 +279,7 @@ zt1-kernel-sync --disable    # 关掉自动跟随
   ```
 
 - WiFi 密码、root 密码通过 **Actions Secrets**（`WIFI_SSID` / `WIFI_PASSWORD` /
-  `WIFI_FALLBACK_SSID` / `WIFI_FALLBACK_PASSWORD` / `ROOT_PASSWORD` / `USB_ROLE`）注入，仓库里不存明文。
+  `WIFI_FALLBACK_SSID` / `WIFI_FALLBACK_PASSWORD` / `ROOT_PASSWORD`）注入，仓库里不存明文。
 
 ---
 

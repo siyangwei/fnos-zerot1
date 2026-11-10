@@ -8,7 +8,7 @@
 #   - 系统/构建期垃圾：/tmp、/var/tmp、apt 缓存与 lists（保险起见再清一次）、
 #     dpkg 旧信息、bash/yaml 历史、root 个人历史文件（.lesshst/.viminfo/.psql_history）
 #   - 任何遗留的 /home/*（首启向导会自己建管理员家目录）
-# 注意：功能脚本（zt1-wifi-connect / zt1-jack / zt1-adb-gadget / zt1-usb-role /
+# 注意：功能脚本（zt1-wifi-connect / zt1-jack / zt1-adb-gadget / zt1-adb-watch /
 #       zt1-audio-* / zt1-ssh-guard / zt1-boot-diag 等）都保留，它们不是残留。
 #
 # 用法: 98-release-cleanup.sh <rootfs-dir>

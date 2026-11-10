@@ -10,8 +10,9 @@
 #   它绑定的 UDC 是 fc000000.usb（RK3588 USB3_OTG0），dts 里 `dr_mode="otg"`。
 #
 # 我们这张板的 dts（dts/mainline-6.18/rk3588-aiot3588a.dts）已经有
-#   usbc0 = fcs,fusb302（Type-C），usb-role-switch 指向 usb_host0_xhci，
-# 插到 PC 上角色会切成 device —— 只要有 adbd + gadget 就能像官方固件一样 adb。
+#   usbc0 = fcs,fusb302（Type-C），usb-role-switch 指向 usb_host0_xhci；
+#   2026-11-10 修好 tcpm 原生角色切换后，插到 PC 会自动切成 device
+#   —— 只要有 adbd + gadget 就能像官方固件一样 adb。
 #
 # 本补丁做的事：
 #   1) 装 adbd（用 assets/vendor-ubuntu-adb/adbd，厂商编译版，Debian 12 的 glibc 2.36 可跑）

@@ -92,6 +92,9 @@ sudo upgrade_tool_2.45 rd
 
 ## 二、厂商定制 u-boot（`UBOOT_MODE=vendor`，历史方案）
 
+> 默认已切到上游 U-Boot（见第一节），厂商模式的补丁与产物只作追溯保留：
+> 源码补丁已归档到 `archive/uboot/0001-zt1-uboot-cpll-ext4-directboot.patch`。
+
 `assets/uboot.img` 是从 <https://github.com/friendlyarm/uboot-rockchip>
 分支 `nanopi6-v2017.09` 打补丁后重编的版本。
 
@@ -106,7 +109,7 @@ sudo upgrade_tool_2.45 rd
 3. 解法：在跳内核前（`arch_preboot_os()`）把 CPLL 切回 1500MHz，并直连引导
    （`load mmc 0:4 /Image /uInitrd /dtb/…` + `booti`）。
 
-### 补丁内容（`patches/uboot/0001-zt1-uboot-cpll-ext4-directboot.patch`）
+### 补丁内容（`archive/uboot/0001-zt1-uboot-cpll-ext4-directboot.patch`）
 
 | 文件 | 改动 |
 |---|---|
@@ -121,7 +124,7 @@ sudo upgrade_tool_2.45 rd
 # 源码树放本仓库 work/ 下（不入库），不要 clone 到仓库根目录
 cd /path/to/fnos-zerot1/work
 git clone https://github.com/friendlyarm/uboot-rockchip -b nanopi6-v2017.09
-cd uboot-rockchip && git apply ../../patches/uboot/0001-*.patch
+cd uboot-rockchip && git apply ../../archive/uboot/0001-*.patch
 ./make.sh nanopi6        # 产物 uboot.img 放回 assets/uboot.img
 ```
 

@@ -62,7 +62,7 @@ sudo ./scripts/build-all.sh         # 默认上游 U-Boot；UBOOT_MODE=vendor �
 ```
 
 **GitHub Actions**：Actions → *Build image* → Run workflow；推 `v*` 标签会自动发 Release。
-产物为 zstd 压缩的 `.img.zst` + 校验文件，Secrets（`WIFI_SSID`/`WIFI_PASSWORD`/`ROOT_PASSWORD`/`USB_ROLE` 等）注入配置。
+产物为 zstd 压缩的 `.img.zst` + 校验文件，Secrets（`WIFI_SSID`/`WIFI_PASSWORD`/`ROOT_PASSWORD` 等）注入配置。
 
 ## 已知限制
 

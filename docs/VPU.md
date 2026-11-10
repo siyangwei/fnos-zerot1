@@ -46,7 +46,7 @@ clock/reset/power ID 和 mainline 能识别的 iommu compatible 写进来即可�
 
 ## 3. 改动（只改 DTS，其他都不动）
 
-文件：`dts/mainline-6.18/rk3588-aiot3588a.dts`（`rk3588-aiot3588a-usbdev.dts` include 它，自动继承）
+文件：`dts/mainline-6.18/rk3588-aiot3588a.dts`
 
 1. `&vpu121 { status = "disabled"; }`：关掉 mainline 占位节点（否则同地址冲突且无驱动）。
 2. 新增 `mpp_srv: mpp-srv`：`compatible = "rockchip,mpp-service"`，
@@ -94,9 +94,9 @@ cpp -nostdinc -I$KC/include -I$KC/arch/arm64/boot/dts \
 adb push /tmp/zt1.dtb /boot/dtb/rockchip/rk3588-aiot3588a.dtb
 adb shell 'sync; reboot'                # 约 9s 回来
 
-# 正式镜像：把两个 dtb 放进 work/images/dtb/rockchip/ 后重打镜像即可
-#   rk3588-aiot3588a.dtb / rk3588-aiot3588a-usbdev.dtb（usbdev include 主 dts，需一起重编）
-# pack-image.sh 在 FNOS_BOOT 路径下会把它们拷进 /boot/dtb/rockchip/
+# 正式镜像：把 dtb 放进 work/images/dtb/rockchip/ 后重打镜像即可
+#   rk3588-aiot3588a.dtb（只有这一份）
+# pack-image.sh 会把它拷进 /boot/dtb/rockchip/
 ```
 
 > 只有 DTS 变了。rootfs 不用动：`rk_vcodec.ko` 及其依赖（rockchip_opp_select /

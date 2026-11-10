@@ -64,9 +64,9 @@ rm -rf "$UPDATE_DIR"
 mkdir -p "$UPDATE_DIR/images"
 
 # ---- 1. loader / u-boot（预编译复用 assets/）----
-# UBOOT_MODE=vendor（默认）: 友善厂商 u-boot（assets/MiniLoaderAll.bin + assets/uboot.img）
-# UBOOT_MODE=upstream     : 上游 u-boot（assets/uboot-upstream/idbloader.img + u-boot.itb）
-UBOOT_MODE="${UBOOT_MODE:-vendor}"
+# UBOOT_MODE=upstream（默认）: 上游 u-boot（assets/uboot-upstream/idbloader.img + u-boot.itb）
+# UBOOT_MODE=vendor         : 友善厂商 u-boot（assets/MiniLoaderAll.bin + assets/uboot.img，历史方案）
+UBOOT_MODE="${UBOOT_MODE:-upstream}"
 case "$UBOOT_MODE" in
   vendor)
     UBOOT_LOADER="$ASSETS_DIR/MiniLoaderAll.bin"
@@ -117,23 +117,11 @@ cp -a "$FNOS_BOOT/uInitrd"   "$BOOT_SRC/uInitrd-$KVER"
 [ -f "$FNOS_BOOT/System.map" ] && cp -a "$FNOS_BOOT/System.map" "$BOOT_SRC/System.map-$KVER"
 ln -sfn "vmlinuz-$KVER" "$BOOT_SRC/Image"
 ln -sfn "uInitrd-$KVER" "$BOOT_SRC/uInitrd"
-# 板级 dtb：u-boot 固定加载 rk3588-aiot3588a.dtb（auto/otg 版，adb 走这里）
-# 另外放入 Type-C 的两种变体，zt1-usb-role 靠覆盖固定文件名 + 重启来切换：
-#   rk3588-aiot3588a.dtb.otg    auto/otg 母本（默认）
-#   rk3588-aiot3588a-host.dtb   host 模式（Type-C 当主机用，adb 不可用）
-#   rk3588-aiot3588a-usbdev.dtb device 模式（强制 peripheral，接 PC 出 adb）
+# 板级 dtb：u-boot 固定加载 rk3588-aiot3588a.dtb。
+# Type-C 角色由 tcpm + fusb302 + usb-role-switch 原生自动切换（DTS 已修好），
+# 不再需要旧的 host/usbdev 变体 dtb 与 zt1-usb-role 覆盖脚本（已归档到 archive/）。
 mkdir -p "$BOOT_SRC/dtb/rockchip"
 cp -f "$IMAGE_DIR/dtb/rockchip/rk3588-aiot3588a.dtb" "$BOOT_SRC/dtb/rockchip/"
-cp -f "$BOOT_SRC/dtb/rockchip/rk3588-aiot3588a.dtb" "$BOOT_SRC/dtb/rockchip/rk3588-aiot3588a.dtb.otg"
-# 兼容旧名（历史镜像里 host 母本叫 .dtb.host，实际内容是 otg 版）
-cp -f "$BOOT_SRC/dtb/rockchip/rk3588-aiot3588a.dtb" "$BOOT_SRC/dtb/rockchip/rk3588-aiot3588a.dtb.host"
-for v in host usbdev; do
-    if [ -f "$IMAGE_DIR/dtb/rockchip/rk3588-aiot3588a-$v.dtb" ]; then
-        cp -f "$IMAGE_DIR/dtb/rockchip/rk3588-aiot3588a-$v.dtb" "$BOOT_SRC/dtb/rockchip/"
-    else
-        warn "缺少 rk3588-aiot3588a-$v.dtb（zt1-usb-role $v 将不可用）"
-    fi
-done
 # extlinux.conf：宿主机手动引导（sysboot）时可用；定制 u-boot 默认走直接引导
 mkdir -p "$BOOT_SRC/extlinux"
 cat > "$BOOT_SRC/extlinux/extlinux.conf" <<'EOF'

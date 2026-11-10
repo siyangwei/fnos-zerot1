@@ -27,7 +27,6 @@ cp config.env.example config.env   # 填自己的 WiFi 与 root 密码（可留�
 | `ENABLE_ADB` | `1` | `1` = 打开 USB adb（USB3 SuperSpeed） |
 | `DEBUG_ETH_IP` | 空 | 有线调试静态 IP（如 `192.168.1.100/24`），空 = 不配置 |
 | `DEBUG_ETH_IFACE` | `eth0` | 上面的网卡名 |
-| `USB_ROLE` | `auto` | Type-C 默认角色：`auto`（默认，device+自动判断插设备）、`device`（固定 peripheral）、`host`（固定主机） |
 
 ## 三个消费点
 
@@ -54,19 +53,21 @@ cp config.env.example config.env   # 填自己的 WiFi 与 root 密码（可留�
 Secret 留空时对应项保持 `config.env.example` 里的空值（镜像仍可用，只是不会自动连 WiFi、
 root 密码回落到默认 `root`）。**不要**把真实密码写进 `config.env.example` 或任何仓库文件。
 
-## 运行时切换（设备上）
+## Type-C 角色切换（tcpm 原生，自动）
 
-```bash
-zt1-usb-role status              # 当前角色（dtb 角色 + 运行时 mode）
-zt1-usb-role auto                # 默认：dtb 用 auto/otg（device + adb，插设备由 autoswitch 自动切 host）
-zt1-usb-role device --reboot     # 固定 device（adb 常开）
-zt1-usb-role host --reboot       # 固定 host（adb 不可用，插 U 盘/键鼠）
-zt1-usb-role host --now          # 本次开机立即切 host，不改 dtb（重启回原角色）
-```
+本板 Type-C（唯一 OTG 口）角色由内核 tcpm（`fcs,fusb302` + `usb-role-switch`）**原生自动切换**，
+无需任何用户态命令：
 
-镜像默认带 `zt1-otg-autoswitch` 守护进程：`auto` 角色下每 0.5s 检查 fusb302 `STATUS0` 与 xhci 设备表，
-插上 sink 设备（U 盘等）自动切 host，拔掉约 9s 自动回 device（恢复 adb）。手动 `--now` 切换后
-10 分钟内 autoswitch 不干预。
+- 插 U 盘/键鼠 → tcpm 自动切 **host**（USB2 480Mbps）并自动挂载到 `/vol00/USB*`
+- 插 PC → tcpm 自动切 **device**，`adbd` 绑定 UDC，adb 可用
+- 拔掉 → 回到无连接状态，等待下次插入
 
-> 注意：定制 u-boot 直接加载固定路径的 dtb，不读 `extlinux.conf`，所以角色切换是**覆盖该 dtb 文件**，
-> 而不是像旧版那样改 `extlinux.conf` 的 `fdt` 行。
+DTS 两处关键修复（见 `dts/mainline-6.18/rk3588-aiot3588a.dts` 注释）：
+
+1. `usb-role-switch` 端点挂在 `usbc0_con: connector` 的 `port@2`（原先挂在 `usb-typec@22` 节点下，
+   tcpm 从 connector 的 fwnode 遍历不到，`port->role_sw` 为 NULL，内核永不切角色）；
+2. 删除 `&usbdp_phy1` 误绑的 `phy-supply = <&vbus5v0_typec>`（否则 PHY 上电即打开 Type-C VBUS，
+   fusb302 报 VBUSOK=1 → tcpm 认为 `vbus_vsafe0v=false` → U 盘场景永远卡在 `SRC_ATTACH_WAIT`）。
+
+> 旧方案（`zt1-usb-role` 覆盖 dtb 切角色、`zt1-otg-autoswitch` 用户态守护）已归档到
+> `archive/rootfs/`，不再安装。

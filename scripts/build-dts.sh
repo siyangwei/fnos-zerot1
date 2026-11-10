@@ -4,8 +4,9 @@
 # 只需要内核源码里的 include/ 与 arch/arm64/boot/dts/（编译 dts 用），
 # 不编译内核，也不需要交叉工具链（cpp + dtc 即可）。
 #
-# 输入：dts/mainline-6.18/rk3588-aiot3588a.dts（+ -usbdev.dts，用 #include 继承）
-# 输出：$IMAGE_DIR/dtb/rockchip/*.dtb（pack-image.sh 会放进 boot 与 resource 分区）
+# 输入：dts/mainline-6.18/rk3588-aiot3588a.dts（只有这一份；Type-C 角色由 tcpm
+#       原生自动切换，旧的 -host.dts / -usbdev.dts 变体已归档到 archive/dts/）
+# 输出：$IMAGE_DIR/dtb/rockchip/rk3588-aiot3588a.dtb（pack-image.sh 放进 boot 分区）
 #
 # 用法：
 #   ./scripts/build-dts.sh
@@ -63,21 +64,17 @@ CPPFLAGS=(-nostdinc -undef -D__DTS__ -x assembler-with-cpp
           -I "$KERNEL_DIR/arch/arm64/boot/dts/rockchip"
           -I "$KERNEL_DIR/scripts/dtc/include-prefixes")
 
-shopt -s nullglob
-DTS_FILES=("$DTS_SRC"/*.dts)
-shopt -u nullglob
-[ "${#DTS_FILES[@]}" -gt 0 ] || die "$DTS_SRC 下没有 .dts"
+DTS_FILE="$DTS_SRC/rk3588-aiot3588a.dts"
+[ -f "$DTS_FILE" ] || die "缺少 $DTS_FILE"
 
-for dts in "${DTS_FILES[@]}"; do
-    name="$(basename "$dts" .dts)"
-    pre="$WORK_DIR/.$name.pre.dts"
-    out="$OUT_DIR/$name.dtb"
-    log "编译 $name.dtb"
-    cpp "${CPPFLAGS[@]}" -o "$pre" "$dts"
-    dtc -q -I dts -O dtb -o "$out" "$pre"
-    rm -f "$pre"
-    printf '  %s  %s B  md5 %s\n' "$out" "$(stat -c %s "$out")" \
-        "$(md5sum "$out" | cut -d' ' -f1)"
-done
+name="$(basename "$DTS_FILE" .dts)"
+pre="$WORK_DIR/.$name.pre.dts"
+out="$OUT_DIR/$name.dtb"
+log "编译 $name.dtb"
+cpp "${CPPFLAGS[@]}" -o "$pre" "$DTS_FILE"
+dtc -q -I dts -O dtb -o "$out" "$pre"
+rm -f "$pre"
+printf '  %s  %s B  md5 %s\n' "$out" "$(stat -c %s "$out")" \
+    "$(md5sum "$out" | cut -d' ' -f1)"
 
 log "dtb 产物目录: $OUT_DIR"

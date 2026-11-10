@@ -71,7 +71,7 @@ sudo ./scripts/patch-rootfs.sh work/rootfs --only 57,70   # 只重跑指定补�
    下载 `linux-6.18.18.tar.xz`（147MB，kernel.org，失败自动换清华镜像），
    只解出 `include/`、`arch/arm64/boot/dts/`、`scripts/dtc/`；
 2. `cpp -nostdinc -undef -D__DTS__ -x assembler-with-cpp …` + `dtc -I dts -O dtb`；
-3. 输出 `work/images/dtb/rockchip/{rk3588-aiot3588a.dtb, rk3588-aiot3588a-usbdev.dtb}`。
+3. 输出 `work/images/dtb/rockchip/rk3588-aiot3588a.dtb`（只有这一份）。
 
 ### 3.4 `pack-image.sh` —— 组装分区并打包
 
