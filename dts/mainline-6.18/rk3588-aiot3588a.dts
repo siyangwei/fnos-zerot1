@@ -8,8 +8,8 @@
  *       （RK BSP 6.1 的 rk3588-aiot3588a.dts），写法遵循上游 mainline 6.18。
  *
  * 与 NanoPC-T6 的主要差异（也是为什么不能直接用 nanopc-t6.dtb）：
- *  1. 主显示是 eDP 面板（1920x1080，标称 60Hz；上游 VOP 只能给 132MHz，
- *     实际刷新率 57.12Hz，详见 panel-timing 注释），不是 HDMI0：
+ *  1. 主显示是 eDP 面板（1920x1080，139MHz / 2080x1111 厂商时序，实机刷新率
+ *     60.15Hz；VOP dclk 实测 136.36MHz，详见 panel-timing 注释），不是 HDMI0：
  *     - eDP PHY = hdptxphy0（fed60000），HDMI0 与 eDP 共用这一颗 PHY，本板未用 HDMI0
  *     - eDP 控制器 edp0 -> VOP VP1；HDMI1 -> VOP VP2（不能走 VP0，理由见下）
  *     - 面板：GPIO2_C5 使能，vcc3v3_lcd_edp 供电，PWM1 背光（GPIO2_C1 使能，周期 20000ns）
@@ -98,16 +98,18 @@
 		status = "okay";
 
 		panel-timing {
-			/* 132MHz：实测 dclk_vop1 只能拿到 132MHz（GPLL 1188/9），
-			 * 而 139MHz 会让 VOP/TRX 的 MSA 时钟与实际像素时钟不一致，
-			 * 先改成 132MHz 验证“MSA 时钟匹配”假设。
+			/* 139MHz / 2080x1111 —— 面板厂商标称时序，2026-11-11 实机验证画面
+			 * 正常，面板侧刷新率 60.15Hz（此前 132MHz 方案只有 57.12Hz）。
+			 *
+			 * VOP dclk 只能从 PLL 整数分频：实测 dclk_vop1 = 136.36MHz
+			 * （1500MHz/11），并非精确 139MHz；但面板 TCON 按该时序工作正常。
+			 * 历史：曾担心 VOP/TRX 的 MSA 时钟与实际像素时钟不一致，先用
+			 * 132MHz（GPLL 1188/9）验证；也试过 132MHz/2000x1100（恰好 60Hz）
+			 * —— 屏幕不出图，TCON 不接受该 porch。
+			 * ⇒ clock-frequency 按标称 139MHz 写；porch 必须保持 2080x1111，
+			 *   不要为凑刷新率改动。
 			 */
-			/* 注意：这里必须用面板厂商给的时序（139MHz / 2080x1111）。
-			 * dclk_vop1 实际只会跑 132MHz（GPLL 1188/9），所以真实刷新率是 57.12Hz；
-			 * 曾试过改成 132MHz/2000x1100 恰好 60Hz —— 实测 eDP 屏直接不出图
-			 *（面板 TCON 不接受这套 porch），故回退，保持 57.12Hz。
-			 */
-			clock-frequency = <132000000>;
+			clock-frequency = <139000000>;
 			hactive = <1920>;
 			vactive = <1080>;
 			hfront-porch = <40>;
