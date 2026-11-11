@@ -155,6 +155,14 @@ jobs:
             echo '```'
             echo ""
             echo "> **适用硬件：视美泰 AIOT-3588A V1.1**（本仓库适配板型）。官方另有 V1.3 板型，硬件有差异、未做适配与验证，请勿直接刷 V1.3。"
+            echo ""
+            echo "## 目前功能"
+            echo "- 启动：eMMC GPT + 上游 U-Boot v2026.10 + fnOS 内核；Web 更新可跟进（自动重编板级模块并切内核）"
+            echo "- 显示：eDP 1920x1080@60.15Hz + HDMI1 自动 EDID"
+            echo "- 网络：千兆、WiFi 5G（含 DFS）、蓝牙"
+            echo "- USB：Type-C tcpm 原生 device/host 自动切换（插 U 盘自动挂载、插 PC 出 adb）、adb USB3 SuperSpeed"
+            echo "- 加速：NPU rknpu、Mali-G610（闭源 kbase，装 fnOS「Mali GPU Driver」）、RGA、VPU 硬解"
+            echo "- 其它：秒级重启、风扇 PWM、MCU 看门狗、串口 console"
           } > RELEASE_NOTES.md
           gh release create "$GITHUB_REF_NAME" \
             "$zst" "output/$base.zst.sha256" "output/SHA256SUMS" \
