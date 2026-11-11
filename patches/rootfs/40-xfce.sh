@@ -54,18 +54,18 @@ if [ "$WITH_XRDP" = "--xrdp" ]; then
     ' || echo "[40-xfce] WARN: xrdp 安装失败"
 fi
 
-# ---- Xorg 加速策略：关闭 glamor ----
-# fnOS 应用中心的 Mali GPU Driver 会把 /usr/lib/aarch64-linux-gnu/mali 加进
-# ld.so.conf 首位，此时 Xorg 的 modesetting 驱动会拿到 Mali 的 libgbm，
-# 实测 glamor 初始化后 ScreenInit 失败、lightdm 起不来。
-# 桌面本身用不到 GL，固定 AccelMethod=none 让 X 不依赖 glamor，桌面始终可用；
-# 装着 libmali 的其它程序（OpenCL/Vulkan/EGL）仍可正常使用。
+# ---- Xorg 加速策略：开源 panthor + glamor ----
+# 2026-11-11 用户选型：开源 panthor 驱动（Mesa EGL 支持 EGLDevice，Xorg glamor 可用），
+# dts &gpu compatible = "rockchip,rk3588-mali", "arm,mali-valhall-csf"。
+# 闭源 libmali g24p0 没有 EGL_EXT_platform_device 扩展（mutter 43 起不来），
+# 且其 X11 EGL 平台初始化失败（glamor 必崩），故不再使用 fnOS 应用中心的 Mali GPU Driver。
+# 实测：modeset(0): glamor X acceleration enabled on Mali-G610 (Panfrost)。
 mkdir -p "$ROOTFS/etc/X11/xorg.conf.d"
 cat > "$ROOTFS/etc/X11/xorg.conf.d/20-zt1-accel.conf" <<'XORGCONF'
 Section "Device"
     Identifier "modeset"
     Driver "modesetting"
-    Option "AccelMethod" "none"
+    Option "AccelMethod" "glamor"
 EndSection
 XORGCONF
 

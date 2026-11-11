@@ -54,6 +54,22 @@ if [ -f "$REPO/assets/modules/$KVER/tcpm.ko" ] && [ -d "$ROOTFS/lib/modules/$KVE
     install -m 0644 "$REPO/assets/modules/$KVER/tcpm.ko" "$ROOTFS/lib/modules/$KVER/updates/zerot1/tcpm.ko"
 fi
 
+# ---- 1b3. panthor 开源 GPU 驱动（2026-11-11 用户选型，见 kernel-modules/panthor/README.md）----
+# 闭源 libmali g24p0 没有 EGL_EXT_platform_device（mutter 43 起不来），X11 EGL 平台也初始化失败
+# （Xorg glamor 必崩）；改用 mainline panthor + Mesa 25 才能给 Xorg glamor 提供 GPU 加速。
+# 镜像预置为 6.18.18-trim 编译好的模块；换内核后由 zt1-kernel-sync 重编再覆盖。
+if [ -d "$REPO/kernel-modules/panthor" ]; then
+    install -d -m 0755 "$ROOTFS/usr/local/lib/zt1/panthor"
+    install -m 0644 "$REPO"/kernel-modules/panthor/*.c "$REPO"/kernel-modules/panthor/*.h \
+                    "$REPO/kernel-modules/panthor/Makefile" "$ROOTFS/usr/local/lib/zt1/panthor/" 2>/dev/null || true
+    if [ -f "$REPO/assets/modules/$KVER/panthor.ko" ] && [ -d "$ROOTFS/lib/modules/$KVER" ]; then
+        panthor_kdir="$ROOTFS/lib/modules/$KVER/kernel/drivers/gpu/drm/panthor"
+        install -d -m 0755 "$panthor_kdir" "$ROOTFS/lib/modules/$KVER/updates/zerot1"
+        install -m 0644 "$REPO/assets/modules/$KVER/panthor.ko" "$panthor_kdir/panthor.ko"
+        install -m 0644 "$REPO/assets/modules/$KVER/panthor.ko" "$ROOTFS/lib/modules/$KVER/updates/zerot1/panthor.ko"
+    fi
+fi
+
 # ---- 1c. 清理历史 rk806_rstfix 残留（RK806 复位模式已由 DTB rockchip,reset-mode=1 接管）----
 rm -f "$ROOTFS/etc/modules-load.d/zt1-rk806-rstfix.conf"
 rm -f "$ROOTFS"/usr/lib/modules/*/updates/zerot1/rk806_rstfix.ko
@@ -336,6 +352,26 @@ if [ -d "$TCLIB" ]; then
         log "已安装 tcpm defer 修复模块到 $tk/tcpm.ko"
     else
         log "警告: tcpm.ko 编译失败（新内核 $NEW），Type-C 角色切换可能随机失效"
+        tail -10 "$bd/build.log" >> "$LOG"
+    fi
+    rm -rf "$bd"
+fi
+
+# ---- 1b3. 重编 panthor（开源 GPU；换内核后需要匹配新内核的模块版本）----
+PTHLIB="/usr/local/lib/zt1/panthor"
+if [ -d "$PTHLIB" ]; then
+    bd="$(mktemp -d)"
+    cp -a "$PTHLIB"/. "$bd"/
+    if make -C "$HB" M="$bd" ARCH=arm64 modules >"$bd/build.log" 2>&1 && [ -f "$bd/panthor.ko" ]; then
+        strip --strip-debug "$bd/panthor.ko" 2>/dev/null || true
+        pk="$KDIR/kernel/drivers/gpu/drm/panthor"; mkdir -p "$pk"
+        [ -f "$pk/panthor.ko" ] && cp -f "$pk/panthor.ko" "$STATE/panthor.ko.$NEW.bak"
+        cp -f "$bd/panthor.ko" "$pk/panthor.ko"
+        mkdir -p "$KDIR/updates/zerot1"
+        cp -f "$bd/panthor.ko" "$KDIR/updates/zerot1/panthor.ko"
+        log "已安装 panthor 开源 GPU 模块到 $pk/panthor.ko"
+    else
+        log "警告: panthor.ko 编译失败（新内核 $NEW），GPU 硬件加速将不可用（桌面回落软件渲染）"
         tail -10 "$bd/build.log" >> "$LOG"
     fi
     rm -rf "$bd"

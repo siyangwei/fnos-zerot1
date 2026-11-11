@@ -35,9 +35,17 @@ fi
 # 修复：强制 vo=x11（CPU 软件渲染，1080p 播放足够；硬解仍可用 --hwdec=rkmpp）。
 mkdir -p "$ROOTFS/etc/mpv"
 cat > "$ROOTFS/etc/mpv/mpv.conf" << 'MPVCONF'
-# zeroT1(RK3588)：Mali EGL/GBM 在 Xorg(AccelMethod none) 下不可用，
-# vo=gpu 初始化失败会让 mpv 0.35.1 pseudo-gui 模式段错误 ⇒ 强制 x11 软件渲染。
+# zeroT1(RK3588)：mpv 0.35.1 在 X11 下 vo=gpu 初始化失败会让 pseudo-gui 模式段错误，
+# 固定 vo=x11；Xorg 开 glamor（panthor）后 x11 输出本身也走 GPU 合成。
 vo=x11
+
+# HDR 视频（HLG / BT.2020 10bit，如手机/相机拍摄的 HLG 素材）：
+# vo=x11 的 swscale 路径不做 HDR→SDR tone mapping，直接播放会严重过曝/高光烧白。
+# 用 zscale + tonemap 在 CPU 上做 HDR→SDR（仅对 HLG 自动生效，SDR 视频不受影响；
+# 实测 1080p30 播放 12s 无掉帧）。
+[hlg]
+profile-cond=p["video-params/primaries"]=="bt.2020" and p["video-params/gamma"]=="hlg"
+vf=lavfi=[zscale=t=linear:npl=100,format=gbrpf32,tonemap=hable:desat=0,zscale=p=bt709:t=bt709:m=bt709:r=tv,format=yuv420p]
 MPVCONF
 cat > "$ROOTFS/usr/share/applications/mpv.desktop" << 'MPVDESK'
 [Desktop Entry]

@@ -95,8 +95,10 @@ elif [ -d /sys/class/devfreq/fdab0000.npu ]; then
 else
   warn "NPU 未启用（/sys/kernel/debug/rknpu 不存在）"
 fi
-if [ -e /dev/mali0 ]; then
-  ok "GPU /dev/mali0 在"; else warn "GPU /dev/mali0 不存在"; fi
+if grep -q "^panthor " /proc/modules 2>/dev/null; then
+  ok "GPU panthor 开源驱动已加载（Mesa panfrost）"
+elif [ -e /dev/mali0 ]; then
+  ok "GPU /dev/mali0 在（闭源 kbase）"; else warn "GPU: panthor 未加载且 /dev/mali0 不存在"; fi
 if [ -e /dev/mpp_service ]; then
   ok "VPU /dev/mpp_service 在（$(grep -c DEVICE /proc/mpp_service/supports-device 2>/dev/null || echo 0) 个设备）"
 else warn "VPU /dev/mpp_service 不存在"; fi
