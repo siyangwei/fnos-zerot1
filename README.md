@@ -28,7 +28,7 @@ sudo upgrade_tool_2.45 uf fnos-aiot3588a-v1.1-update-YYYYMMDD.img
 | 网络 | 千兆（实测 950/1015 Mbps）；WiFi BCM43455 2.4G/5G + **DFS**（默认 US 域，ch52-64/100-144 可用）；蓝牙 |
 | USB | 唯一 Type-C（OTG）自动识别 device/host（插 U 盘自动挂载）；**adb over USB3.0 SuperSpeed**；2× USB-A |
 | 存储 | boot 512MB ext4（版本化内核 + 软链）；rootfs btrfs 固定 5.6GB，剩余空间在 Web 建存储池；SD 卡 SDR104 198MHz |
-| 加速器 | NPU `rknpu 0.9.8`（实测 face_det 640×640 单帧 145ms）、Mali-G610、RGA、VPU（H.264/HEVC/VP9 等硬解，H.264/MJPEG 硬编） |
+| 加速器 | NPU `rknpu 0.9.8`（实测 face_det 640×640 单帧 145ms）、Mali-G610（默认闭源 kbase，装 fnOS「Mali GPU Driver」；可选开源 panthor）、RGA、VPU（H.264/HEVC/VP9 等硬解，H.264/MJPEG 硬编） |
 | 其它 | 秒级重启、风扇 PWM、MCU 看门狗、串口 console |
 
 ## 烧录
@@ -71,6 +71,7 @@ sudo ./scripts/build-all.sh         # 默认上游 U-Boot；UBOOT_MODE=vendor �
 - HDMI 2K240 等高刷需 FRL，未启用；4K60 及以下正常。
 - adb 传输约 18MB/s（受厂商 adbd 4.2.2 协议限制，链路本身 5Gbps）。
 - 5G 热点在 DFS 信道时依赖 `WIFI_COUNTRY="US"`（默认）；改 `CN` 会搜不到，最省事是把路由器 5G 固定到 36-48 / 149-165。
+- **X11 下快速甩动鼠标时视频画面会短暂冻结**（mpv/Chrome 均出现，光标流畅、声音正常；根因是 Xorg `drmModeDirtyFB` 原子提交同步等 vblank，与解码/GPU 驱动无关），暂未解决。
 
 ## 文档
 

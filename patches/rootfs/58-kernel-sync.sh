@@ -54,9 +54,10 @@ if [ -f "$REPO/assets/modules/$KVER/tcpm.ko" ] && [ -d "$ROOTFS/lib/modules/$KVE
     install -m 0644 "$REPO/assets/modules/$KVER/tcpm.ko" "$ROOTFS/lib/modules/$KVER/updates/zerot1/tcpm.ko"
 fi
 
-# ---- 1b3. panthor 开源 GPU 驱动（2026-11-11 用户选型，见 kernel-modules/panthor/README.md）----
-# 闭源 libmali g24p0 没有 EGL_EXT_platform_device（mutter 43 起不来），X11 EGL 平台也初始化失败
-# （Xorg glamor 必崩）；改用 mainline panthor + Mesa 25 才能给 Xorg glamor 提供 GPU 加速。
+# ---- 1b3. panthor 开源 GPU 驱动（可选方案；默认闭源 kbase，见 kernel-modules/panthor/README.md）----
+# 默认镜像走闭源 kbase（dts &gpu compatible=arm,mali-valhall + 40-xfce.sh AccelMethod=none），
+# panthor 模块仅预置到 rootfs/updates 备选，闭源 dts 下不会被 probe。
+# 切到开源 panthor：dts &gpu 的 compatible 改上游形态 + 40-xfce.sh 改 glamor（详见 dts 注释）。
 # 镜像预置为 6.18.18-trim 编译好的模块；换内核后由 zt1-kernel-sync 重编再覆盖。
 if [ -d "$REPO/kernel-modules/panthor" ]; then
     install -d -m 0755 "$ROOTFS/usr/local/lib/zt1/panthor"

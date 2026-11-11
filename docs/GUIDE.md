@@ -92,7 +92,7 @@ bootcmd 写死「从 0x40 处读 SPL、直连 /Image」，升级/换布局都很
 | SD/TF 卡 | 板载 SD 控制器可用：**SDR104 198MHz**，实测顺序读 **86.9 MB/s**（`GPIO0_B7` 电源极性已修） |
 | 系统更新 | Web「更新和还原」可正常更新（已验证 1.1.31 → 1.2.1000、内核 c1196）；`zt1-kernel-sync` 自动重编板级模块、切内核并自动重启一次 |
 | 视频编解码 | 硬解：H.264（含 4K）、HEVC（含 4K）、VP9、VP8、MPEG-1/2/4、H.263、MJPEG；硬编：H.264、MJPEG |
-| GPU | Mali-G610 用户态库（fnOS 应用中心「Mali GPU Driver」可安装）：OpenCL/Vulkan/EGL 可用；XFCE 桌面固定 `AccelMethod=none`（不用 GL，避免 Mali libgbm 与 Xorg glamor 冲突） |
+| GPU | **默认闭源 kbase**（`/dev/mali0`，fnOS 应用中心「Mali GPU Driver」装 libmali g24p0）：OpenCL/Vulkan/EGL 可用；XFCE 桌面固定 `AccelMethod=none`（libmali 无 X11 EGL 平台，glamor 会崩）。可选开源 panthor（Mesa，GL 3.1）已预置在 `kernel-modules/panthor/`，切换见 dts `&gpu` 注释 |
 | NPU | **RK3588 NPU 可用**：`rknpu 0.9.8` 正常 probe（`/sys/class/devfreq/fdab0000.npu`、`/sys/kernel/debug/rknpu/{load,freq,power}`）；实测 `librknnrt 2.3.2` + fnOS「飞牛AI引擎」`face_det.rk3588.rknn` 640x640 单帧 **145 ms**、输出 12800/3200/800 三个张量 |
 | 电源 / 杂项 | 秒级重启（CRU 复位 + RK806 RST_FUN 修复）、风扇 PWM、板载 MCU 看门狗、串口 console（ttyS2@1500000） |
 

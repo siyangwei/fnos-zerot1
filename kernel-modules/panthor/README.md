@@ -4,7 +4,7 @@ Mali-G610 (Valhall CSF) 的开源内核驱动，取自 mainline Linux **6.18.18*
 `drivers/gpu/drm/panthor/`，未做功能修改。fnOS 内核（vendor 定制）没有启用
 `CONFIG_DRM_PANTHOR`，所以以 out-of-tree 模块方式编译加载。
 
-## 为什么用 panthor（2026-11-11 用户选型）
+## 默认走闭源 kbase，panthor 为可选方案（2026-11-11 用户选型）
 
 | | 闭源 kbase（fnOS 默认） | 开源 panthor |
 |---|---|---|
@@ -15,8 +15,11 @@ Mali-G610 (Valhall CSF) 的开源内核驱动，取自 mainline Linux **6.18.18*
 | GNOME Wayland (mutter 43) | 起不来（EGLDevice 平台缺失） | 可启动（但登录后 scanout 失败，见下） |
 | 3D/Vulkan/OpenCL | GLES 3.2 / Vulkan 1.2 / OpenCL 3.0 | GL 3.1（Mesa 上限）/ panvk 实验性 / 无 OpenCL |
 
-选 panthor 是为了让 **Xorg glamor 桌面/浏览器/窗口化视频走上 GPU**（浏览器卡顿问题的
-目标）；闭源用户态在这块板子上无法给任何 X11/Wayland 桌面提供加速。
+2026-11-11 曾切到 panthor 验证：它能让 **Xorg glamor 桌面/浏览器/窗口化视频走上 GPU**，
+但该路线的 GL 上限是 3.1、3D 性能约为闭源 60~80%，且 X11 下快速甩动鼠标卡顿问题
+（根因在 Xorg dirtyfb 同步等 vblank，与 GPU 驱动无关）两种方案都存在。用户最终选型
+**默认闭源 kbase**（3D/Vulkan/OpenCL 更强）；panthor 作为可选方案保留（切换方法见
+`dts/mainline-6.18/rk3588-aiot3588a.dts` 的 `&gpu` 注释与 `patches/rootfs/40-xfce.sh`）。
 
 ## 重要坑
 

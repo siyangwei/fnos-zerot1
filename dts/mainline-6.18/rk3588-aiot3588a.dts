@@ -1490,8 +1490,8 @@
 };
 
 &usb_host0_xhci {
-	/* 正常（host/otg）模式。接 PC 需要 adb 时用 usbdev 变体 dtb：
-	 * dts/mainline-6.18/rk3588-aiot3588a-usbdev.dts（dr_mode=peripheral）。 */
+	/* host/otg 由 tcpm 原生切换（插 PC 自动 device + adb，插 U 盘自动 host）；
+	 * 旧的 usbdev/host 变体 dtb 已归档到 archive/dts/（2026-11-10 修好 tcpm 原生切换后停用）。 */
 	usb-role-switch;
 	status = "okay";
 
