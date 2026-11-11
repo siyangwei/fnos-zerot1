@@ -36,7 +36,7 @@ fi
 mkdir -p "$ROOTFS/etc/mpv"
 cat > "$ROOTFS/etc/mpv/mpv.conf" << 'MPVCONF'
 # zeroT1(RK3588)：mpv 0.35.1 在 X11 下 vo=gpu 初始化失败会让 pseudo-gui 模式段错误，
-# 固定 vo=x11；Xorg 开 glamor（panthor）后 x11 输出本身也走 GPU 合成。
+# 固定 vo=x11（CPU 软件渲染；本机默认闭源 kbase + AccelMethod none，X11 无 GPU 合成）。
 vo=x11
 
 # HDR 视频（HLG / BT.2020 10bit，如手机/相机拍摄的 HLG 素材）：

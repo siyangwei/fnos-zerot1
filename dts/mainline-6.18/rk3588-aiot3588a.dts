@@ -390,12 +390,22 @@
  */
 
 &gpu {
-	/* 2026-11-11 用户选型：开源 panthor（Mesa EGL 支持 EGLDevice 平台）
-	 * 闭源 libmali g24p0 的 EGL client extensions 无 EGL_EXT_platform_device，
-	 * mutter 43 创建 Wayland 合成器时 eglQueryDevicesEXT 失败（"EGLDevice currently
-	 * only works with single GPU systems"），闭源无法支撑 GNOME Wayland；
-	 * Xorg 下 libmali 的 EGL X11 平台初始化也失败。故桌面 GPU 加速走 panthor。 */
-	compatible = "rockchip,rk3588-mali", "arm,mali-valhall-csf";
+	/* 2026-11-11 用户选型：默认闭源 kbase（vendor 驱动，3D/Vulkan/OpenCL 强）。
+	 * 开源 panthor 方案完整实现于 kernel-modules/panthor/ 与 58-kernel-sync 1b3 段；
+	 * 如需切换：compatible 改为 "rockchip,rk3588-mali", "arm,mali-valhall-csf"
+	 * 并删除下方 BSP interrupts/clocks（同时 40-xfce.sh 的 AccelMethod 改 glamor）。
+	 * 闭源注意：Xorg glamor 不可用（libmali 无 X11 EGL 平台、无 EGL_EXT_platform_device），
+	 * AccelMethod 必须 none（桌面 llvmpipe 软件渲染）；需在 fnOS 应用中心装
+	 * Mali GPU Driver 才有闭源用户态库（libmali）。 */
+	compatible = "arm,mali-valhall";
+	interrupts = <GIC_SPI 94 IRQ_TYPE_LEVEL_HIGH 0>,
+		     <GIC_SPI 93 IRQ_TYPE_LEVEL_HIGH 0>,
+		     <GIC_SPI 92 IRQ_TYPE_LEVEL_HIGH 0>;
+	interrupt-names = "GPU", "MMU", "JOB";
+	clocks = <&scmi_clk SCMI_CLK_GPU>, <&cru CLK_GPU_COREGROUP>,
+		 <&cru CLK_GPU_STACKS>, <&cru CLK_GPU>;
+	clock-names = "clk_mali", "clk_gpu_coregroup",
+		      "clk_gpu_stacks", "clk_gpu";
 	mali-supply = <&vdd_gpu_s0>;
 	/* 不要加 mem-supply：OPP 表是单路 3 值 opp-microvolt，两个 supply 会报
 	 * "Invalid number of elements in microvolt property (3) with supplies (2)"
